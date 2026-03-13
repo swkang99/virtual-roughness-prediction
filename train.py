@@ -1,163 +1,113 @@
-import numpy as np
-import torch.nn as nn
+from pathlib import Path
+import argparse
+try:
+    import yaml
+except Exception:
+    yaml = None
 import torch
-from torch.utils.data import DataLoader
 from torchvision import transforms
-from torch.amp import autocast, GradScaler
-
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_absolute_error, r2_score
 
 from model import MultiBackBoneRegressor
 import data
+from engine import FeatureCacheManager, Trainer
 
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
-    print("Warning: GPU is not available")
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train regressor with optional feature cache handling')
+    parser.add_argument('--config', type=str, default='config.yaml', help='Path to config YAML')
+    parser.add_argument('--skip-cache', dest='skip_cache', action='store_true', help='Skip cache generation; require cache already exists')
+    parser.add_argument('--force-cpu-cache', dest='force_cpu_cache', action='store_true', help='Force CPU extraction when generating cache')
+    parser.add_argument('--batch-size', type=int, help='Batch size (overrides config)')
+    parser.add_argument('--num-epochs', type=int, help='Number of epochs (overrides config)')
+    parser.add_argument('--feature-extractor', type=str, help='Feature extractor model name (overrides config)')
+    parser.add_argument('--image-size', type=int, help='Image resize size (square)')
+    parser.add_argument('--num-workers', type=int, help='DataLoader num_workers')
+    return parser.parse_args()
 
-scaler = GradScaler('cuda')
-
-# 하이퍼파라미터 설정
-batch_size = 64
-num_epochs = 100
-feature_extractor = 'resnet18'
-
-model = MultiBackBoneRegressor(feature_extractor).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-criterion = nn.MSELoss()
-
-df_train, df_valid, df_test = data.build_dataframe()
-transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor()
-])
-
-train_dataset = data.CustomRegressionDataset(df_train, transform)
-valid_dataset = data.CustomRegressionDataset(df_valid, transform)
-test_dataset = data.CustomRegressionDataset(df_test, transform)
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=8,
-    pin_memory=True
-)
-valid_loader = DataLoader(
-    valid_dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=8,
-    pin_memory=True
-)
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=8,
-    pin_memory=True
-)
-
-def train():
-    best_val_loss = float('inf')
-    for epoch in range(num_epochs):
-        model.train()
-        total_loss = 0.0
-
-        for (texture_img, normal_map, height_map), labels in train_loader:
-            inputs = texture_img.to(device), normal_map.to(device), height_map.to(device)
-            labels = labels.to(device)
-
-            with autocast(device_type='cuda', dtype=torch.float16):
-                predict = model(*inputs)
-                loss = criterion(predict, labels)
-
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-
-            total_loss += loss.detach().item()
-
-        avg_train_loss = total_loss / len(train_loader)
-
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for (texture_img, normal_map, height_map), targets in valid_loader:
-                inputs = texture_img.to(device), normal_map.to(device), height_map.to(device)
-                targets = targets.to(device)
-
-                outputs = model(*inputs)
-                loss = criterion(outputs, targets)
-                val_loss += loss.item()
-        
-        avg_val_loss = val_loss / len(valid_loader)
-        print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {avg_train_loss:.4f}, Validation Loss: {avg_val_loss:.4f}")
-
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), 'best_model.pth')
-
-def eval_test_set(model, test_loader, criterion, device):
-    # 모델 로드 및 평가 모드 전환
-    model.load_state_dict(torch.load('best_model.pth', map_location=device))
-    model.eval()
-    
-    test_loss = 0.0
-    predictions = []
-    ground_truths = []
-
-    with torch.no_grad():
-        for (texture, normal, height), targets in test_loader:
-            # 입력 및 타겟 GPU 이동
-            texture = texture.to(device)
-            normal = normal.to(device)
-            height = height.to(device)
-            targets = targets.to(device)
-
-            outputs = model(texture, normal, height)
-            loss = criterion(outputs, targets)
-            test_loss += loss.item()
-
-            # 값 저장 (배치 전체 저장)
-            predictions.append(outputs.cpu().numpy())
-            ground_truths.append(targets.cpu().numpy())
-
-    # (배치, 4) 형태를 (N, 4)로 합침
-    predictions = np.concatenate(predictions, axis=0)
-    ground_truths = np.concatenate(ground_truths, axis=0)
-    
-    # 전체 4개 특성별 MAE, R2 구하기
-    maes = mean_absolute_error(ground_truths, predictions, multioutput='raw_values')
-    r2s = r2_score(ground_truths, predictions, multioutput='raw_values')
-    avg_mae = maes.mean()
-    avg_r2 = r2s.mean()
-    
-    print("\nTest Results (각 특성별):")
-    headers = ['Roughness', 'Stickiness', 'Bumpiness', 'Hardness']
-    for i, h in enumerate(headers):
-        print(f"{h:>10}: MAE={maes[i]:.4f} | R2={r2s[i]:.4f}")
-    print(f"\n평균 MAE: {avg_mae:.4f} | 평균 R2: {avg_r2:.4f} | 평균 Loss: {test_loss / len(test_loader):.4f}")
-
-    # 특성별 산점도 시각화
-    plt.figure(figsize=(10, 10))
-    for i, h in enumerate(headers):
-        plt.subplot(2, 2, i+1)
-        plt.scatter(ground_truths[:, i], predictions[:, i], alpha=0.5)
-        plt.xlabel('Ground Truth')
-        plt.ylabel('Prediction')
-        plt.title(h)
-        plt.plot([ground_truths[:, i].min(), ground_truths[:, i].max()], 
-                 [ground_truths[:, i].min(), ground_truths[:, i].max()],
-                 'r--', lw=1)
-    plt.tight_layout()
-    plt.savefig('results_multi.png')
-    plt.close()
 
 def main():
-    # train()
-    eval_test_set(model, test_loader, criterion, device)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    args = parse_args()
+
+    # dataframes
+    df_train, df_valid, df_test = data.build_dataframe()
+    print(f"Dataset sizes: train={len(df_train)}, valid={len(df_valid)}, test={len(df_test)}")
+
+    # load config
+    config_path = Path(args.config)
+    config = {}
+    if config_path.exists():
+        if yaml is None:
+            raise SystemExit('PyYAML is required to load config.yaml. Install with: pip install pyyaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+    # defaults and overrides
+    cfg_feature_extractor = args.feature_extractor or config.get('feature_extractor')
+    cfg_batch_size = args.batch_size or config.get('batch_size')
+    cfg_num_epochs = args.num_epochs or config.get('num_epochs')
+    cfg_image_size = args.image_size or config.get('image_size')
+    cfg_num_workers = args.num_workers if args.num_workers is not None else config.get('num_workers', 0)
+    # extraction config
+    extraction_cfg = config.get('extraction', {}) if config else {}
+    cfg_extraction_batch = extraction_cfg.get('batch_size', 8)
+    cfg_extraction_workers = extraction_cfg.get('num_workers', cfg_num_workers)
+    cfg_extraction_use_mp = extraction_cfg.get('use_multiprocessing', False)
+
+    # rebuild transform with configured image size
+    transform = transforms.Compose([
+        transforms.Resize((cfg_image_size, cfg_image_size)),
+        transforms.ToTensor()
+    ])
+
+    model = MultiBackBoneRegressor(cfg_feature_extractor)
+
+    cache_root = Path(config.get('cache_root', 'feature_cache'))
+    cache_mgr = FeatureCacheManager(model, transform, cache_root, device)
+    trainer = Trainer(model, df_train, df_valid, device, cfg_feature_extractor, cache_root, transform, batch_size=cfg_batch_size, num_epochs=cfg_num_epochs, num_workers=cfg_num_workers)
+
+    # Ensure cache exists (compute if missing) with respect to flags
+    if args.skip_cache:
+        if not cache_mgr.cache_exists(cfg_feature_extractor):
+            raise SystemExit('Cache missing but --skip-cache specified. Aborting.')
+    else:
+        if not cache_mgr.cache_exists(cfg_feature_extractor):
+            print('Computing feature cache (this runs backbone once per image)...')
+            cache_mgr.compute_and_cache(
+                df_train, cfg_feature_extractor, 'train',
+                force_cpu=args.force_cpu_cache,
+                batch_size=cfg_extraction_batch,
+                num_workers=cfg_extraction_workers,
+                use_multiprocessing=cfg_extraction_use_mp
+            )
+            cache_mgr.compute_and_cache(
+                df_valid, cfg_feature_extractor, 'valid',
+                force_cpu=args.force_cpu_cache,
+                batch_size=cfg_extraction_batch,
+                num_workers=cfg_extraction_workers,
+                use_multiprocessing=cfg_extraction_use_mp
+            )
+
+    # start training (uses cached features)
+    trainer.train()
+
+    # after training, try to generate plots by running plot.py in a subprocess
+    try:
+        import subprocess, sys
+
+        ck_dir = Path('checkpoints') / cfg_feature_extractor
+        log_file = ck_dir / 'training_log.csv'
+        if log_file.exists():
+            print('Generating training plots...')
+            plot_script = Path(__file__).parent / 'plot.py'
+            # call plot.py as a separate process to avoid any matplotlib backend issues
+            subprocess.run([sys.executable, str(plot_script), '--config', str(config_path), '--extractor', cfg_feature_extractor], check=False)
+            print('Plot generation finished (if plot.py succeeded).')
+        else:
+            print(f'No training log found at {log_file}, skipping plot generation.')
+    except Exception as e:
+        print(f'Plot generation failed: {e}')
+
 
 if __name__ == '__main__':
     main()

@@ -37,49 +37,52 @@ class CustomRegressionDataset(Dataset):
         return (texture_img, normal_map, height_map), targets
 
 def build_dataframe(base_dir="data"):
-    csv_path = os.path.join(base_dir, "adjective_rating_shuffled.csv")
+    csv_path = os.path.join(base_dir, 'original', 'adjective_rating_shuffled.csv')
 
-    # If explicit train/valid id lists exist, use them
-    train_ids_path = os.path.join(base_dir, 'train_ids.csv')
-    valid_ids_path = os.path.join(base_dir, 'valid_ids.csv')
+    # 1) 먼저 헬퍼 함수들을 최상단에 정의
+    def build_from_id_list(id_list, split_name=None):
+        rows = []
+        for sid in id_list:
+            if split_name:
+                tex_dir = os.path.join(base_dir, 'split', split_name, 'texture_image')
+                nor_dir = os.path.join(base_dir, 'split', split_name, 'normal_map')
+                hei_dir = os.path.join(base_dir, 'split', split_name, 'height_map')
+            else:
+                tex_dir = os.path.join(base_dir, 'original', 'texture_image')
+                nor_dir = os.path.join(base_dir, 'original', 'normal_map')
+                hei_dir = os.path.join(base_dir, 'original', 'height_map')
+
+            tex = _find_image_path(tex_dir, int(sid), ['.png', '.jpg', '.JPG'])
+            nor = _find_image_path(nor_dir, int(sid), ['.png', '.jpg', '.JPG'])
+            hei = _find_image_path(hei_dir, int(sid), ['.png', '.jpg', '.JPG'])
+
+            if all([tex, nor, hei]):
+                if os.path.exists(csv_path):
+                    labels_df = pd.read_csv(csv_path, header=None)
+                    idx = int(sid) - 1
+                    rough = labels_df.iloc[idx][0]
+                else:
+                    rough = 0.0
+
+                rows.append({
+                    'texture_path': tex,
+                    'normal_path': nor,
+                    'height_path': hei,
+                    'roughness': rough
+                })
+        return pd.DataFrame(rows)
+
+    # 2) train_ids / valid_ids 있는 경우
+    train_ids_path = os.path.join(base_dir, 'split','train_ids.csv')
+    valid_ids_path = os.path.join(base_dir, 'split','valid_ids.csv')
     if os.path.exists(train_ids_path) and os.path.exists(valid_ids_path):
-        # read ids (assume header 'id')
         train_ids = pd.read_csv(train_ids_path)['id'].astype(str).tolist()
         valid_ids = pd.read_csv(valid_ids_path)['id'].astype(str).tolist()
 
-        def build_from_id_list(id_list, split_name=None):
-            rows = []
-            for sid in id_list:
-                # sid corresponds to image filename without extension
-                # prefer split-specific directories (e.g. data/train/texture_image)
-                if split_name:
-                    tex_dir = os.path.join(base_dir, split_name, 'texture_image')
-                    nor_dir = os.path.join(base_dir, split_name, 'normal_map')
-                    hei_dir = os.path.join(base_dir, split_name, 'height_map')
-                else:
-                    tex_dir = os.path.join(base_dir, 'texture_image')
-                    nor_dir = os.path.join(base_dir, 'normal_map')
-                    hei_dir = os.path.join(base_dir, 'height_map')
-
-                tex = _find_image_path(tex_dir, int(sid), ['.png', '.jpg', '.JPG'])
-                nor = _find_image_path(nor_dir, int(sid), ['.png', '.jpg', '.JPG'])
-                hei = _find_image_path(hei_dir, int(sid), ['.png', '.jpg', '.JPG'])
-                if all([tex, nor, hei]):
-                    # labels CSV may not be present; try to read adjective_rating_shuffled.csv if available
-                    if os.path.exists(csv_path):
-                        labels_df = pd.read_csv(csv_path, header=None)
-                        idx = int(sid) - 1
-                        rough = labels_df.iloc[idx][0]
-                    else:
-                        rough = 0.0
-                    rows.append({'texture_path': tex, 'normal_path': nor, 'height_path': hei, 'roughness': rough})
-            return pd.DataFrame(rows)
-
-    # build using split subfolders if present
-    train_df = build_from_id_list(train_ids, split_name='train')
-    valid_df = build_from_id_list(valid_ids, split_name='valid')
-    test_df = pd.DataFrame([])
-    return train_df, valid_df, test_df
+        train_df = build_from_id_list(train_ids, split_name='train')
+        valid_df = build_from_id_list(valid_ids, split_name='valid')
+        test_df = pd.DataFrame([])
+        return train_df, valid_df #, test_df
 
     # otherwise fall back to adjective_rating_shuffled.csv
     if not os.path.exists(csv_path):
@@ -144,14 +147,14 @@ def build_dataframe(base_dir="data"):
     return split_dataframe(pd.DataFrame(data_rows))
 
 def split_dataframe(df, valid_size=0.5, test_size=0.15, random_state=42):
-    train_df, test_df = train_test_split(
-        df, test_size=test_size, random_state=random_state
-    )
+    # train_df, test_df = train_test_split(
+    #     df, test_size=test_size, random_state=random_state
+    # )
     train_df, valid_df = train_test_split(
-        train_df, test_size=valid_size/(1-test_size), random_state=random_state
+        df, test_size=valid_size/(1-test_size), random_state=random_state
     )
 
-    return train_df, valid_df, test_df
+    return train_df, valid_df#, test_df
 
 def _find_image_path(directory, idx, exts):
     """확장자 순회하며 실제 파일 경로 탐색"""

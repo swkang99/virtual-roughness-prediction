@@ -1,0 +1,10 @@
+matplotlib==3.10.8
+numpy==2.4.3
+pandas==3.0.1
+Pillow==12.1.1
+PyYAML==6.0.2
+scikit_learn==1.8.0
+timm==1.0.25
+torch==2.8.0.dev20250415+cu128
+torchvision==0.22.0.dev20250416+cu128
+tqdm==4.67.1

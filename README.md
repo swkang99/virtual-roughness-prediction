@@ -3,13 +3,14 @@ Project: virtual-tactile-property
 Input : Texture PBR maps -> Output : Roughness
 
 Directory
+```
 virtual-tactile-property/
 ├── config.yaml
 ├── README.md
 ├── requirements.txt
 ├── train.py
 ├── val.py
-├── data/
+├── data/    # currently ignored. Please get from your PC
 │   ├── original/
 │   │   ├── adjective_rating_shuffled.csv
 │   │   ├── height_map/
@@ -48,3 +49,4 @@ virtual-tactile-property/
         ├── plot.py
         ├── running_time_test.py
         └── split_dataset.py
+```

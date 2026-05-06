@@ -35,10 +35,9 @@ def loocv_evaluation(config_path='config.yaml', force_cpu=False):
 
     device = torch.device('cuda') if torch.cuda.is_available() and not force_cpu else torch.device('cpu')
 
-    # Load full dataset (train + valid)
-    df_train, df_valid  = data.build_dataframe()
-    full_df = pd.concat([df_train, df_valid], ignore_index=True)
-    print(f"Full dataset size: {len(full_df)}")
+    # Load full dataset from original source, ignoring any split directories
+    full_df = data.build_original_dataframe()
+    print(f"Full original dataset size: {len(full_df)}")
 
     # Ensure features are cached for the full dataset
     from torchvision import transforms

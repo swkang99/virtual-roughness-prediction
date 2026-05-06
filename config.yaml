@@ -1,5 +1,5 @@
 # Default configuration for training
-feature_extractor: nfnet_l0
+feature_extractor: resnet50
 batch_size: 8
 num_epochs: 100
 image_size: 560

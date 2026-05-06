@@ -146,6 +146,29 @@ def build_dataframe(base_dir="data"):
 
     return split_dataframe(pd.DataFrame(data_rows))
 
+
+def build_original_dataframe(base_dir="data"):
+    csv_path = os.path.join(base_dir, 'original', 'adjective_rating_shuffled.csv')
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Original label CSV not found: {csv_path}")
+
+    labels_df = pd.read_csv(csv_path, header=None)
+    exts = ['.png', '.jpg', '.JPG']
+    data_rows = []
+    for idx in range(len(labels_df)):
+        texture_path = _find_image_path(os.path.join(base_dir, 'original', 'texture_image'), idx+1, exts)
+        normal_path = _find_image_path(os.path.join(base_dir, 'original', 'normal_map'), idx+1, exts)
+        height_path = _find_image_path(os.path.join(base_dir, 'original', 'height_map'), idx+1, exts)
+        if all([texture_path, normal_path, height_path]):
+            data_rows.append({
+                'texture_path': texture_path,
+                'normal_path': normal_path,
+                'height_path': height_path,
+                'roughness': labels_df.iloc[idx][0]
+            })
+    return pd.DataFrame(data_rows)
+
+
 def split_dataframe(df, valid_size=0.5, test_size=0.15, random_state=42):
     # train_df, test_df = train_test_split(
     #     df, test_size=test_size, random_state=random_state

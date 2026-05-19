@@ -1,9 +1,9 @@
 import argparse
 from pathlib import Path
-import importlib
 import numpy as np
 import torch
 import torch.nn as nn
+from torchvision import transforms
 from torch.utils.data import DataLoader, Subset
 from sklearn.metrics import mean_absolute_error, r2_score, root_mean_squared_error
 import pandas as pd
@@ -11,10 +11,10 @@ import yaml
 import csv
 import time
 from tqdm import tqdm
-from src.model.model import MultiBackBoneRegressor
-from src.engine.engine import FeatureCacheManager
-import src.utils.data as data
-from src.engine.engine import CachedFeatureDataset
+from src.model.prediction.model import MultiBackBoneRegressor
+from src.model.prediction.cnn_1d import MultiScale1DCNN
+from src.model.feature.extract import FeatureCacheManager
+from src.data.dataset import CachedFeatureDataset, build_original_dataframe
 
 def loocv_evaluation(config_path='config.yaml', force_cpu=False):
     cfg_path = Path(config_path)
@@ -36,18 +36,15 @@ def loocv_evaluation(config_path='config.yaml', force_cpu=False):
     device = torch.device('cuda') if torch.cuda.is_available() and not force_cpu else torch.device('cpu')
 
     # Load full dataset from original source, ignoring any split directories
-    full_df = data.build_original_dataframe()
+    full_df = build_original_dataframe()
     print(f"Full original dataset size: {len(full_df)}")
 
     # Ensure features are cached for the full dataset
-    from torchvision import transforms
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor()
     ])
     # Load 1D CNN class dynamically because module name starts with a digit
-    model_module = importlib.import_module('src.model.1dCNN')
-    MultiScale1DCNN = model_module.MultiScale1DCNN
 
     # Use the MultiBackBoneRegressor only for feature extraction/caching
     feature_extractor_model = MultiBackBoneRegressor(feature_extractor)

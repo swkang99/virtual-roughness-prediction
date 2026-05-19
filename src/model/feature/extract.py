@@ -1,31 +1,16 @@
-import os
-import time
-import json
-import csv
+import argparse
 from pathlib import Path
-from PIL import Image
+import yaml
 import torch
-from torch.utils.data import DataLoader, Dataset
+import pandas as pd
 from torchvision import transforms
-from torch.amp import autocast, GradScaler
+from src.model.prediction.model import MultiBackBoneRegressor
+from src.model.feature.extract import FeatureCacheManager
+from src.data.dataset import build_dataframe
+from torch.utils.data import DataLoader, Dataset
+import os
+from PIL import Image
 from tqdm import tqdm
-
-
-class CachedFeatureDataset(Dataset):
-    def __init__(self, df, cache_root, split_name):
-        self.df = df.reset_index(drop=True)
-        self.split_cache = Path(cache_root) / split_name
-        self.ids = [str(int(Path(p).stem)) for p in self.df['texture_path'].tolist()]
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        sid = self.ids[idx]
-        feat_path = self.split_cache / f"{sid}.pt"
-        feat = torch.load(str(feat_path), weights_only=False).float()
-        target = torch.tensor(self.df.iloc[idx]['roughness'], dtype=torch.float32)
-        return feat, target
 
 
 class FeatureCacheManager:
@@ -167,112 +152,77 @@ class FeatureCacheManager:
                 raise
 
 
-class Trainer:
-    def __init__(self, model, df_train, df_valid, device, feature_extractor, cache_root, transform, batch_size=8, num_epochs=100, num_workers=0):
-        self.model = model
-        self.df_train = df_train
-        self.df_valid = df_valid
-        self.device = device
-        self.feature_extractor = feature_extractor
-        self.cache_root = Path(cache_root)
-        self.transform = transform
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.num_workers = num_workers
 
-        self.scaler = GradScaler()
-        self.criterion = torch.nn.MSELoss()
-        # freeze backbones by default
-        for name, p in self.model.named_parameters():
-            if not name.startswith('regressor'):
-                p.requires_grad = False
-        self.model.to(self.device)
-        try:
-            self.model.backbone_texture.eval()
-            self.model.backbone_normal.eval()
-            self.model.backbone_height.eval()
-        except Exception:
-            pass
 
-        self.optimizer = torch.optim.AdamW(self.model.regressor.parameters(), lr=1e-4)
+def run_extraction(config_path='config.yaml', splits=('train','valid'), force_cpu=False):
+    cfg_path = Path(config_path)
+    if not cfg_path.exists():
+        raise SystemExit(f'Config not found: {cfg_path}')
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f) or {}
 
-    def prepare_cached_dataloaders(self):
-        train_ds = CachedFeatureDataset(self.df_train, self.cache_root / self.feature_extractor, 'train')
-        valid_ds = CachedFeatureDataset(self.df_valid, self.cache_root / self.feature_extractor, 'valid')
-        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=(self.device.type=='cuda'))
-        valid_loader = DataLoader(valid_ds, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, pin_memory=(self.device.type=='cuda'))
-        return train_loader, valid_loader
+    feature_extractor = config.get('feature_extractor')
+    if not feature_extractor:
+        raise SystemExit('feature_extractor not set in config.yaml')
 
-    def train(self):
-        best_val_loss = float('inf')
-        ckpt_dir = Path('checkpoints') / self.feature_extractor
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        log_path = ckpt_dir / f'training_log.csv'
-        if not log_path.exists():
-            with open(log_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['epoch', 'train_loss', 'val_loss', 'lr', 'timestamp'])
+    cache_root = Path(config.get('cache_root', 'feature_cache'))
+    image_size = config.get('image_size', 560)
+    extraction_cfg = config.get('extraction', {})
+    batch_size = extraction_cfg.get('batch_size', 8)
+    num_workers = extraction_cfg.get('num_workers', 2)
 
-        train_loader, valid_loader = self.prepare_cached_dataloaders()
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-        for epoch in range(self.num_epochs):
-            self.model.train()
-            total_loss = 0.0
-            epoch_start = time.time()
+    # build transform and model
+    transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor()
+    ])
+    model = MultiBackBoneRegressor(feature_extractor)
+    cache_mgr = FeatureCacheManager(model, transform, cache_root, device)
 
-            for batch in tqdm(train_loader, desc=f"Train {epoch+1}/{self.num_epochs}", unit='batch'):
-                self.optimizer.zero_grad()
-                feats, labels = batch
-                feats = feats.to(self.device)
-                labels = labels.to(self.device).view(-1,1)
+    # load dataframes to iterate
+    df_train, df_valid, df_test = build_dataframe()
+    mapping = {'train': df_train, 'valid': df_valid, 'full': pd.concat([df_train, df_valid], ignore_index=True)}
 
-                if self.device.type == 'cuda':
-                    with autocast(self.device.type):
-                        outputs = self.model.regressor(feats)
-                        loss = self.criterion(outputs, labels)
-                    self.scaler.scale(loss).backward()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    outputs = self.model.regressor(feats)
-                    loss = self.criterion(outputs, labels)
-                    loss.backward()
-                    self.optimizer.step()
+    for split in splits:
+        if split not in mapping:
+            print(f'Skipping unknown split: {split}')
+            continue
+        df = mapping[split]
+        split_cache = cache_root / feature_extractor / split
+        if split_cache.exists() and any(split_cache.iterdir()):
+            print(f'Cache for {split} already exists at {split_cache}, skipping')
+            continue
+        print(f'Generating cache for {split}...')
+        cache_mgr.compute_and_cache(df, feature_extractor, split, force_cpu=force_cpu, batch_size=batch_size, num_workers=num_workers)
 
-                total_loss += loss.detach().item()
 
-            avg_train_loss = total_loss / max(1, len(train_loader))
+def main():
+    parser = argparse.ArgumentParser(description='Extract and cache features per config')
+    parser.add_argument('--config', type=str, default='config.yaml')
+    parser.add_argument('--splits', type=str, default='train,valid', help='Comma separated splits to extract (train,valid)')
+    parser.add_argument('--force-cpu', action='store_true')
+    parser.add_argument('--only-missing', dest='only_missing', action='store_true', help='Only extract missing splits (default)')
+    parser.add_argument('--overwrite', dest='overwrite', action='store_true', help='Overwrite existing cache for the requested splits')
+    args = parser.parse_args()
 
-            # validation
-            self.model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for batch in tqdm(valid_loader, desc=f"Val {epoch+1}/{self.num_epochs}", unit='batch', leave=False):
-                    feats, targets = batch
-                    feats = feats.to(self.device)
-                    targets = targets.to(self.device).view(-1,1)
-                    outputs = self.model.regressor(feats)
-                    loss = self.criterion(outputs, targets)
-                    val_loss += loss.item()
+    splits = [s.strip() for s in args.splits.split(',') if s.strip()]
+    # determine behavior: default is only_missing unless --overwrite specified
+    if args.overwrite:
+        # remove existing cache for splits before extraction
+        cfg_path = Path(args.config)
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+        feature_extractor = config.get('feature_extractor')
+        cache_root = Path(config.get('cache_root', 'feature_cache'))
+        for split in splits:
+            dir_to_rm = cache_root / feature_extractor / split
+            if dir_to_rm.exists():
+                import shutil
+                shutil.rmtree(dir_to_rm)
+    run_extraction(args.config, splits=splits, force_cpu=args.force_cpu)
 
-            avg_val_loss = val_loss / max(1, len(valid_loader))
-            epoch_time = time.time() - epoch_start
-            lr = self.optimizer.param_groups[0]['lr'] if self.optimizer.param_groups else 0.0
-            print(f"Epoch {epoch+1}/{self.num_epochs} - Train Loss: {avg_train_loss:.4f}, Validation Loss: {avg_val_loss:.4f} - time: {epoch_time:.1f}s - lr: {lr:.2e}")
 
-            with open(log_path, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([epoch+1, f"{avg_train_loss:.6f}", f"{avg_val_loss:.6f}", f"{lr:.6f}", time.time()])
-
-            status = {'epoch': epoch+1, 'train_loss': avg_train_loss, 'val_loss': avg_val_loss, 'lr': lr, 'timestamp': time.time()}
-            with open('current_status.json', 'w') as f:
-                json.dump(status, f)
-
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                # save best model in checkpoint directory
-                best_path_pth = Path('checkpoints') / self.feature_extractor / 'best_model.pth'
-                best_path_pt = Path('checkpoints') / self.feature_extractor / 'best.pt'
-                torch.save(self.model.state_dict(), str(best_path_pth))
-                # also save a copy as best.pt for convenience
-                torch.save(self.model.state_dict(), str(best_path_pt))
+if __name__ == '__main__':
+    main()

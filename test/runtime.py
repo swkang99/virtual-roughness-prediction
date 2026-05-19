@@ -5,12 +5,11 @@ import torch
 from torch import nn
 import timm
 
-from src.utils.data import CustomRegressionDataset   # 실제 경로에 맞게 수정
-from src.utils.data import build_dataframe          # 위에서 작성한 함수
+from src.data.dataset import build_dataframe, CustomRegressionDataset
 
 from torchvision import transforms
 
-from src.model.model import MultiBackBoneRegressor
+from src.model.prediction.model import MultiBackBoneRegressor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

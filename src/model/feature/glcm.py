@@ -1,7 +1,7 @@
 import numpy as np
 from skimage.feature import graycomatrix
 from skimage import color, img_as_ubyte
-from skimage.transform import resize
+
 
 def gray_level_co_occurrence_matrix(img):
 
@@ -10,7 +10,7 @@ def gray_level_co_occurrence_matrix(img):
         img = color.rgb2gray(img)
         img = img_as_ubyte(img)
 
-    img = resize(img, (1568, 1568), preserve_range=True, anti_aliasing=True)
+    # img = resize(img, (1568, 1568), preserve_range=True, anti_aliasing=True)
 
     # 0–7 범위로 양자화 (8단계)
     img_q = (img // 32).astype(np.uint8)  # 256 → 8단계 (0~7)

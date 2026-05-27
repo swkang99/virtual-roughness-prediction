@@ -29,7 +29,7 @@ def extract_glcm_features(image_array):
 
 
 def extract_lbp_features(image_array):
-    feature_vector, lbp_maps, resized_img = extract_lbp_feature(image_array, grid=(7, 7))
+    feature_vector, lbp_maps = extract_lbp_feature(image_array, grid=(7, 7))
     return feature_vector
 
 def extract_resnet50_features(image_tensor, model, device):

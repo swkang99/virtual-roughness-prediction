@@ -52,7 +52,8 @@ class MultiScale1DCNN(nn.Module):
         # Combined FC + output
         # =========================
         self.fc_combined  = nn.Linear(50 + 50, 100)
-        self.output_layer = nn.Linear(100, 1)   # roughness 한 축만 예측
+        # self.output_layer = nn.Linear(100, 1)   # roughness 한 축만 예측
+        self.output_layer = nn.Linear(100, 4)   # HA 4개 모두 예측
 
     def forward(self, x):
         # x: (batch, input_feature_dim) -> (batch, 1, L)

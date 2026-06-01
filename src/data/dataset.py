@@ -60,16 +60,17 @@ def _load_roughness_labels(csv_path):
 
     labels_df = pd.read_csv(csv_path, header=None)
     if labels_df.shape[1] == 1:
-        return {str(i + 1): float(labels_df.iloc[i, 0]) for i in range(len(labels_df))}
+        return {str(i + 1): float(labels_df.iloc[i, 0]) + 50 for i in range(len(labels_df))}
 
     if 'id' in labels_df.columns and 'roughness' in labels_df.columns:
-        return labels_df.set_index('id')['roughness'].astype(float).astype(str).to_dict()
+        return {k: float(v) + 50 for k, v in labels_df.set_index('id')['roughness'].astype(float).to_dict().items()}
 
     if 'roughness' in labels_df.columns:
         roughness = labels_df['roughness'].astype(float).tolist()
-        return {str(i + 1): roughness[i] for i in range(len(roughness))}
+        return {str(i + 1): roughness[i] + 50 for i in range(len(roughness))}
 
-    return {str(i + 1): float(labels_df.iloc[i, 1]) for i in range(len(labels_df))} # second col
+    # return {str(i + 1): float(labels_df.iloc[i, 1]) for i in range(len(labels_df))} # second col (labels_df.iloc[i, 1])
+    return {str(i + 1): [v + 50 if isinstance(v, (int, float)) else v for v in labels_df.iloc[i].tolist()] for i in range(len(labels_df))} # use all HA
 
 
 def _find_image_path(directory, sid, exts):
@@ -97,20 +98,15 @@ def build_original_dataframe(base_dir="data/original"):
         sid = tex_path.stem
         height_dir, normal_dir = process_texture(tex_path)
         
-        roughness = label_map.get(sid)
-        if roughness is None:
-            try:
-                roughness = label_map[str(int(sid))]
-            except Exception:
-                raise ValueError(
-                    f"Could not find roughness label for sample id '{sid}' in {csv_path}"
-                )
+        # roughness = label_map.get(sid)
+        haptic_attribute_list = label_map.get(sid)
 
         rows.append({
             'texture_path': str(tex_path),
             'normal_path': normal_dir,
             'height_path': height_dir,
-            'roughness': float(roughness)
+            # 'roughness': float(roughness)
+            'haptic_attribute': haptic_attribute_list
         })
 
     return pd.DataFrame(rows)

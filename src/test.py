@@ -1,0 +1,386 @@
+from pathlib import Path
+import argparse
+import json
+
+import numpy as np
+import pandas as pd
+import torch
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from tqdm import tqdm
+
+from model.prediction.model import MultiBackBoneRegressor
+from data.texture_maps import (
+    load_grayscale_image,
+    extract_height_map,
+    extract_normal_map_rgb,
+)
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Inference on MOESM test textures only")
+
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=SCRIPT_DIR / "data" / "MOESM",
+        help="Path to MOESM data directory",
+    )
+    parser.add_argument(
+        "--test-image-dir",
+        type=Path,
+        default=None,
+        help="Path to test texture image directory. Default: <data-dir>/test/MOESM1",
+    )
+    parser.add_argument(
+        "--test-ids",
+        type=Path,
+        default=None,
+        help="Path to test_ids.csv. Default: <data-dir>/test_ids.csv",
+    )
+    parser.add_argument(
+        "--labels",
+        type=Path,
+        default=None,
+        help="Path to ParticipantData.csv. Default: <data-dir>/ParticipantData.csv",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=SCRIPT_DIR / "checkpoints" / "resnet50" / "best_model.pth",
+        help="Path to trained checkpoint",
+    )
+    parser.add_argument(
+        "--feature-extractor",
+        type=str,
+        default="resnet50",
+        help="timm model name used during training",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=560,
+        help="Input image size used for inference",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Inference batch size",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader num_workers",
+    )
+    parser.add_argument(
+        "--gt-col",
+        type=int,
+        default=1,
+        help=(
+            "Ground-truth column index in ParticipantData.csv. "
+            "Default 1 matches the current dataset.py behavior for multi-column CSV."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=SCRIPT_DIR / "test_results" / "resnet50" / "test_predictions.csv",
+        help="Output CSV path",
+    )
+
+    return parser.parse_args()
+
+
+def read_test_ids(test_ids_path: Path):
+    if not test_ids_path.exists():
+        raise FileNotFoundError(f"test_ids.csv not found: {test_ids_path}")
+
+    df = pd.read_csv(test_ids_path)
+
+    if "id" in df.columns:
+        ids = df["id"].astype(str).tolist()
+    else:
+        df = pd.read_csv(test_ids_path, header=None)
+        ids = df.iloc[:, 0].astype(str).tolist()
+
+    return ids
+
+
+def load_gt_map(labels_path: Path, gt_col: int):
+    if not labels_path.exists():
+        raise FileNotFoundError(f"ParticipantData.csv not found: {labels_path}")
+
+    labels_df = pd.read_csv(labels_path, header=None)
+
+    if gt_col < 0 or gt_col >= labels_df.shape[1]:
+        raise IndexError(
+            f"Invalid gt_col={gt_col}. "
+            f"{labels_path} has {labels_df.shape[1]} columns."
+        )
+
+    gt_map = {}
+    for i in range(len(labels_df)):
+        sid = str(i + 1)
+        gt_map[sid] = float(labels_df.iloc[i, gt_col])
+
+    return gt_map
+
+
+def find_texture_path(image_dir: Path, sid: str):
+    exts = [".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG"]
+
+    candidate_stems = [sid]
+
+    try:
+        sid_int = int(sid)
+        candidate_stems.extend([
+            str(sid_int),
+            f"{sid_int:03d}",
+            f"{sid_int:04d}",
+            f"{sid_int:05d}",
+        ])
+    except ValueError:
+        pass
+
+    candidate_stems = list(dict.fromkeys(candidate_stems))
+
+    for stem in candidate_stems:
+        for ext in exts:
+            path = image_dir / f"{stem}{ext}"
+            if path.exists():
+                return path
+
+    raise FileNotFoundError(
+        f"Could not find texture image for id={sid} in {image_dir}"
+    )
+
+
+def make_height_and_normal_from_texture(
+    texture_path: Path,
+    blur_ksize=5,
+    strength=4.0,
+    invert=False,
+    invert_y=False,
+):
+    gray_img = load_grayscale_image(texture_path)
+
+    height_map = extract_height_map(
+        gray_img,
+        blur_ksize=blur_ksize,
+        invert=invert,
+        normalize_output=True,
+    )
+
+    normal_map_rgb = extract_normal_map_rgb(
+        height_map,
+        strength=strength,
+        invert_y=invert_y,
+    )
+
+    height_uint8 = (np.clip(height_map, 0.0, 1.0) * 255.0).astype(np.uint8)
+    normal_uint8 = np.clip(normal_map_rgb, 0, 255).astype(np.uint8)
+
+    height_img = Image.fromarray(height_uint8, mode="L").convert("RGB")
+    normal_img = Image.fromarray(normal_uint8, mode="RGB")
+
+    return height_img, normal_img
+
+
+class TextureOnlyTestDataset(Dataset):
+    def __init__(self, test_ids, image_dir, gt_map, transform):
+        self.test_ids = [str(int(x)) if str(x).isdigit() else str(x) for x in test_ids]
+        self.image_dir = Path(image_dir)
+        self.gt_map = gt_map
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.test_ids)
+
+    def __getitem__(self, idx):
+        sid = self.test_ids[idx]
+
+        texture_path = find_texture_path(self.image_dir, sid)
+
+        if sid not in self.gt_map:
+            raise KeyError(f"GT value for id={sid} was not found in ParticipantData.csv")
+
+        texture_img = Image.open(texture_path).convert("RGB")
+        height_img, normal_img = make_height_and_normal_from_texture(texture_path)
+
+        texture_tensor = self.transform(texture_img)
+        normal_tensor = self.transform(normal_img)
+        height_tensor = self.transform(height_img)
+
+        target = torch.tensor(self.gt_map[sid], dtype=torch.float32)
+
+        return texture_tensor, normal_tensor, height_tensor, target, sid, str(texture_path)
+
+
+def load_checkpoint(model, checkpoint_path: Path, device):
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    try:
+        state_dict = torch.load(
+            str(checkpoint_path),
+            map_location=device,
+            weights_only=True,
+        )
+    except TypeError:
+        state_dict = torch.load(str(checkpoint_path), map_location=device)
+
+    if isinstance(state_dict, dict) and "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]
+
+    if any(k.startswith("module.") for k in state_dict.keys()):
+        state_dict = {
+            k.replace("module.", "", 1): v
+            for k, v in state_dict.items()
+        }
+
+    model.load_state_dict(state_dict)
+    print(f"Loaded checkpoint: {checkpoint_path}")
+
+
+def forward_multibackbone(model, texture, normal, height):
+    feat_texture = model.backbone_texture(texture)
+    feat_normal = model.backbone_normal(normal)
+    feat_height = model.backbone_height(height)
+
+    feats = torch.cat([feat_texture, feat_normal, feat_height], dim=1)
+    outputs = model.regressor(feats)
+
+    return outputs
+
+
+def compute_metrics(preds, targets):
+    preds = np.asarray(preds, dtype=np.float64)
+    targets = np.asarray(targets, dtype=np.float64)
+
+    errors = preds - targets
+
+    mse = float(np.mean(errors ** 2))
+    rmse = float(np.sqrt(mse))
+    mae = float(np.mean(np.abs(errors)))
+
+    ss_res = float(np.sum((targets - preds) ** 2))
+    ss_tot = float(np.sum((targets - np.mean(targets)) ** 2))
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    return {
+        "mse": mse,
+        "rmse": rmse,
+        "mae": mae,
+        "r2": r2,
+    }
+
+
+def main():
+    args = parse_args()
+
+    data_dir = args.data_dir
+    test_image_dir = args.test_image_dir or (data_dir / "test" / "MOESM1")
+    test_ids_path = args.test_ids or (data_dir / "test_ids.csv")
+    labels_path = args.labels or (data_dir / "ParticipantData.csv")
+
+    if not test_image_dir.exists():
+        raise FileNotFoundError(f"Test image directory not found: {test_image_dir}")
+
+    test_ids = read_test_ids(test_ids_path)
+    gt_map = load_gt_map(labels_path, gt_col=args.gt_col)
+
+    print(f"Test image directory: {test_image_dir}")
+    print(f"Number of test ids: {len(test_ids)}")
+    print(f"GT CSV: {labels_path}")
+    print(f"GT column index: {args.gt_col}")
+
+    transform = transforms.Compose([
+        transforms.Resize((args.image_size, args.image_size)),
+        transforms.ToTensor(),
+    ])
+
+    dataset = TextureOnlyTestDataset(
+        test_ids=test_ids,
+        image_dir=test_image_dir,
+        gt_map=gt_map,
+        transform=transform,
+    )
+
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    print(f"Device: {device}")
+
+    model = MultiBackBoneRegressor(args.feature_extractor)
+    load_checkpoint(model, args.checkpoint, device)
+    model.to(device)
+    model.eval()
+
+    preds = []
+    targets = []
+    ids = []
+    texture_paths = []
+
+    with torch.no_grad():
+        for texture, normal, height, target, sid, texture_path in tqdm(loader, desc="Inference", unit="batch"):
+            texture = texture.to(device)
+            normal = normal.to(device)
+            height = height.to(device)
+
+            if device.type == "cuda":
+                with torch.amp.autocast(device_type="cuda"):
+                    output = forward_multibackbone(model, texture, normal, height)
+            else:
+                output = forward_multibackbone(model, texture, normal, height)
+
+            output = output.detach().cpu().view(-1).numpy()
+            target = target.detach().cpu().view(-1).numpy()
+
+            preds.extend(output.tolist())
+            targets.extend(target.tolist())
+            ids.extend(list(sid))
+            texture_paths.extend(list(texture_path))
+
+    metrics = compute_metrics(preds, targets)
+
+    print("\nTest Results")
+    print(f"MSE : {metrics['mse']:.6f}")
+    print(f"RMSE: {metrics['rmse']:.6f}")
+    print(f"MAE : {metrics['mae']:.6f}")
+    print(f"R2  : {metrics['r2']:.6f}")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    result_df = pd.DataFrame({
+        "id": ids,
+        "target": targets,
+        "prediction": preds,
+        "absolute_error": np.abs(np.asarray(preds) - np.asarray(targets)),
+        "squared_error": (np.asarray(preds) - np.asarray(targets)) ** 2,
+        "texture_path": texture_paths,
+    })
+
+    result_df.to_csv(args.output, index=False)
+
+    metrics_path = args.output.with_suffix(".metrics.json")
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=4)
+
+    print(f"\nSaved predictions to: {args.output}")
+    print(f"Saved metrics to: {metrics_path}")
+
+
+if __name__ == "__main__":
+    main()

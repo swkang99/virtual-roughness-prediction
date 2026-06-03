@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 python -m pip install opencv-python
 
-python3 ./data/split_dataset.py --data-dir ./data/MOESM --train-ratio 80 --valid-ratio 15 --test-ratio 5   
+필요 시 실행 => python3 ./data/split_dataset.py --data-dir ./data/MOESM --train-ratio 80 --valid-ratio 15 --test-ratio 5  
 
 python3 train.py
 

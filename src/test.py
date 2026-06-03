@@ -14,7 +14,6 @@ from model.prediction.model import MultiBackBoneRegressor
 from data.texture_maps import (
     load_grayscale_image,
     extract_height_map,
-    extract_normal_map_rgb,
 )
 
 
@@ -22,7 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Inference on MOESM test textures only")
+    parser = argparse.ArgumentParser(description="Inference on MOESM test textures using height-only transformer")
 
     parser.add_argument(
         "--data-dir",
@@ -30,54 +29,56 @@ def parse_args():
         default=SCRIPT_DIR / "data" / "MOESM",
         help="Path to MOESM data directory",
     )
+
     parser.add_argument(
         "--test-image-dir",
         type=Path,
         default=None,
         help="Path to test texture image directory. Default: <data-dir>/test/MOESM1",
     )
+
     parser.add_argument(
         "--test-ids",
         type=Path,
         default=None,
         help="Path to test_ids.csv. Default: <data-dir>/test_ids.csv",
     )
+
     parser.add_argument(
         "--labels",
         type=Path,
         default=None,
         help="Path to ParticipantData.csv. Default: <data-dir>/ParticipantData.csv",
     )
+
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=SCRIPT_DIR / "checkpoints" / "resnet50" / "best_model.pth",
-        help="Path to trained checkpoint",
+        default=SCRIPT_DIR / "checkpoints" / "height_transformer" / "best_model.pth",
+        help="Path to trained height-transformer checkpoint",
     )
-    parser.add_argument(
-        "--feature-extractor",
-        type=str,
-        default="resnet50",
-        help="timm model name used during training",
-    )
+
     parser.add_argument(
         "--image-size",
         type=int,
         default=560,
-        help="Input image size used for inference",
+        help="Input image size. Must match training image_size.",
     )
+
     parser.add_argument(
         "--batch-size",
         type=int,
         default=8,
         help="Inference batch size",
     )
+
     parser.add_argument(
         "--num-workers",
         type=int,
         default=0,
         help="DataLoader num_workers",
     )
+
     parser.add_argument(
         "--gt-col",
         type=int,
@@ -87,10 +88,11 @@ def parse_args():
             "Default 1 matches the current dataset.py behavior for multi-column CSV."
         ),
     )
+
     parser.add_argument(
         "--output",
         type=Path,
-        default=SCRIPT_DIR / "test_results" / "resnet50" / "test_predictions.csv",
+        default=SCRIPT_DIR / "test_results" / "height_transformer" / "test_predictions.csv",
         help="Output CSV path",
     )
 
@@ -109,7 +111,7 @@ def read_test_ids(test_ids_path: Path):
         df = pd.read_csv(test_ids_path, header=None)
         ids = df.iloc[:, 0].astype(str).tolist()
 
-    return ids
+    return [str(int(x)) if str(x).isdigit() else str(x) for x in ids]
 
 
 def load_gt_map(labels_path: Path, gt_col: int):
@@ -156,18 +158,18 @@ def find_texture_path(image_dir: Path, sid: str):
             if path.exists():
                 return path
 
-    raise FileNotFoundError(
-        f"Could not find texture image for id={sid} in {image_dir}"
-    )
+    raise FileNotFoundError(f"Could not find texture image for id={sid} in {image_dir}")
 
 
-def make_height_and_normal_from_texture(
+def make_height_from_texture(
     texture_path: Path,
     blur_ksize=5,
-    strength=4.0,
     invert=False,
-    invert_y=False,
 ):
+    """
+    train.py에서 사용한 height map과 같은 방식으로 texture image에서 height image 생성.
+    저장하지 않고 메모리상 PIL image로만 반환.
+    """
     gray_img = load_grayscale_image(texture_path)
 
     height_map = extract_height_map(
@@ -177,24 +179,15 @@ def make_height_and_normal_from_texture(
         normalize_output=True,
     )
 
-    normal_map_rgb = extract_normal_map_rgb(
-        height_map,
-        strength=strength,
-        invert_y=invert_y,
-    )
-
     height_uint8 = (np.clip(height_map, 0.0, 1.0) * 255.0).astype(np.uint8)
-    normal_uint8 = np.clip(normal_map_rgb, 0, 255).astype(np.uint8)
+    height_img = Image.fromarray(height_uint8, mode="L")
 
-    height_img = Image.fromarray(height_uint8, mode="L").convert("RGB")
-    normal_img = Image.fromarray(normal_uint8, mode="RGB")
-
-    return height_img, normal_img
+    return height_img
 
 
-class TextureOnlyTestDataset(Dataset):
+class HeightOnlyTestDataset(Dataset):
     def __init__(self, test_ids, image_dir, gt_map, transform):
-        self.test_ids = [str(int(x)) if str(x).isdigit() else str(x) for x in test_ids]
+        self.test_ids = test_ids
         self.image_dir = Path(image_dir)
         self.gt_map = gt_map
         self.transform = transform
@@ -210,16 +203,16 @@ class TextureOnlyTestDataset(Dataset):
         if sid not in self.gt_map:
             raise KeyError(f"GT value for id={sid} was not found in ParticipantData.csv")
 
-        texture_img = Image.open(texture_path).convert("RGB")
-        height_img, normal_img = make_height_and_normal_from_texture(texture_path)
+        height_img = make_height_from_texture(texture_path)
 
-        texture_tensor = self.transform(texture_img)
-        normal_tensor = self.transform(normal_img)
-        height_tensor = self.transform(height_img)
+        if self.transform is not None:
+            height_tensor = self.transform(height_img)
+        else:
+            height_tensor = transforms.ToTensor()(height_img)
 
         target = torch.tensor(self.gt_map[sid], dtype=torch.float32)
 
-        return texture_tensor, normal_tensor, height_tensor, target, sid, str(texture_path)
+        return height_tensor, target, sid, str(texture_path)
 
 
 def load_checkpoint(model, checkpoint_path: Path, device):
@@ -246,17 +239,6 @@ def load_checkpoint(model, checkpoint_path: Path, device):
 
     model.load_state_dict(state_dict)
     print(f"Loaded checkpoint: {checkpoint_path}")
-
-
-def forward_multibackbone(model, texture, normal, height):
-    feat_texture = model.backbone_texture(texture)
-    feat_normal = model.backbone_normal(normal)
-    feat_height = model.backbone_height(height)
-
-    feats = torch.cat([feat_texture, feat_normal, feat_height], dim=1)
-    outputs = model.regressor(feats)
-
-    return outputs
 
 
 def compute_metrics(preds, targets):
@@ -299,13 +281,15 @@ def main():
     print(f"Number of test ids: {len(test_ids)}")
     print(f"GT CSV: {labels_path}")
     print(f"GT column index: {args.gt_col}")
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Image size: {args.image_size}")
 
     transform = transforms.Compose([
         transforms.Resize((args.image_size, args.image_size)),
         transforms.ToTensor(),
     ])
 
-    dataset = TextureOnlyTestDataset(
+    dataset = HeightOnlyTestDataset(
         test_ids=test_ids,
         image_dir=test_image_dir,
         gt_map=gt_map,
@@ -323,7 +307,18 @@ def main():
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Device: {device}")
 
-    model = MultiBackBoneRegressor(args.feature_extractor)
+    model = MultiBackBoneRegressor(
+        model_name=None,
+        image_size=args.image_size,
+        embed_dim=128,
+        num_heads=4,
+        depth=4,
+        mlp_ratio=4.0,
+        dropout=0.1,
+        bounded_output=False,
+        output_scale=100.0,
+    )
+
     load_checkpoint(model, args.checkpoint, device)
     model.to(device)
     model.eval()
@@ -334,16 +329,15 @@ def main():
     texture_paths = []
 
     with torch.no_grad():
-        for texture, normal, height, target, sid, texture_path in tqdm(loader, desc="Inference", unit="batch"):
-            texture = texture.to(device)
-            normal = normal.to(device)
+        for height, target, sid, texture_path in tqdm(loader, desc="Inference", unit="batch"):
             height = height.to(device)
+            target = target.to(device).view(-1, 1)
 
             if device.type == "cuda":
                 with torch.amp.autocast(device_type="cuda"):
-                    output = forward_multibackbone(model, texture, normal, height)
+                    output = model(height)
             else:
-                output = forward_multibackbone(model, texture, normal, height)
+                output = model(height)
 
             output = output.detach().cpu().view(-1).numpy()
             target = target.detach().cpu().view(-1).numpy()
@@ -363,12 +357,15 @@ def main():
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
+    preds_arr = np.asarray(preds)
+    targets_arr = np.asarray(targets)
+
     result_df = pd.DataFrame({
         "id": ids,
-        "target": targets,
-        "prediction": preds,
-        "absolute_error": np.abs(np.asarray(preds) - np.asarray(targets)),
-        "squared_error": (np.asarray(preds) - np.asarray(targets)) ** 2,
+        "target": targets_arr,
+        "prediction": preds_arr,
+        "absolute_error": np.abs(preds_arr - targets_arr),
+        "squared_error": (preds_arr - targets_arr) ** 2,
         "texture_path": texture_paths,
     })
 

@@ -1,0 +1,6 @@
+id,target,prediction,absolute_error,squared_error,texture_path
+36,-38.93000030517578,-12.8828125,26.04718780517578,678.4559925580979,/home/cglab/Desktop/dev/virtual-tactile-property/src/data/MOESM/test/MOESM1/36.JPG
+95,38.7239990234375,13.875,24.8489990234375,617.4727524667978,/home/cglab/Desktop/dev/virtual-tactile-property/src/data/MOESM/test/MOESM1/95.jpg
+4,-3.163300037384033,0.5390625,3.702362537384033,13.707488358224737,/home/cglab/Desktop/dev/virtual-tactile-property/src/data/MOESM/test/MOESM1/4.jpg
+15,-44.35599899291992,-28.3125,16.043498992919922,257.39385993582255,/home/cglab/Desktop/dev/virtual-tactile-property/src/data/MOESM/test/MOESM1/15.jpg
+82,35.409000396728516,-14.046875,49.455875396728516,2445.883611256737,/home/cglab/Desktop/dev/virtual-tactile-property/src/data/MOESM/test/MOESM1/82.JPG

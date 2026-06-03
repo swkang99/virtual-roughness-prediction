@@ -342,9 +342,9 @@ def main():
     model = MultiBackBoneRegressor(
         model_name=None,
         image_size=cfg_image_size,
-        embed_dim=128,
-        num_heads=4,
-        depth=4,
+        embed_dim=64,#128,
+        num_heads=1,#4,
+        depth=1,#4,
         mlp_ratio=4.0,
         dropout=0.1,
         bounded_output=False,

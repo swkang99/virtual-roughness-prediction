@@ -1,7 +1,7 @@
 # Default configuration for training
 feature_extractor: resnet50
-batch_size: 4
-num_epochs: 1000
+batch_size: 8
+num_epochs: 100
 image_size: 560
 num_workers: 0
 cache_root: feature_cache

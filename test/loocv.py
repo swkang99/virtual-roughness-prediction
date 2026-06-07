@@ -12,7 +12,7 @@ import csv
 import time
 from tqdm import tqdm
 from src.model.prediction.model import MultiBackBoneRegressor
-from src.model.prediction.cnn_1d import MultiScale1DCNN
+from src.model.prediction.cnn_1d_w import MultiScale1DCNN
 from src.model.feature.extract import FeatureCacheManager
 from src.data.dataset import CachedFeatureDataset, build_original_dataframe
 

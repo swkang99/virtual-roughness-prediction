@@ -1,11 +1,19 @@
+# Code for 1D CNN proposed from below 
+# Hassan, W., Joolee, J.B. & Jeon, S. 
+# Establishing haptic texture attribute space and predicting haptic attributes from image features using 1D-CNN. 
+# Sci Rep 13, 11684 (2023). 
+# https://doi.org/10.1038/s41598-023-38929-6
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class MultiScale1DCNN(nn.Module):
+class CNN1D4HA(nn.Module):
     def __init__(self, input_feature_dim=3955):
-        super(MultiScale1DCNN, self).__init__()
+        super(CNN1D4HA, self).__init__()
+
+        seq_len_after_pools = max(1, input_feature_dim // 4)
 
         # =========================
         # Narrow path (kernel=3)
@@ -20,11 +28,14 @@ class MultiScale1DCNN(nn.Module):
         self.conv3_narrow = nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1)
         self.bn3_narrow   = nn.BatchNorm1d(128)
 
-        self.conv4_narrow = nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1)
-        self.bn4_narrow   = nn.BatchNorm1d(256)
-        self.mp2_narrow   = nn.MaxPool1d(kernel_size=2, stride=2)
+        self.conv4_narrow = nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.bn4_narrow   = nn.BatchNorm1d(128)
 
-        seq_len_after_pools = max(1, input_feature_dim // 4)
+        self.conv5_narrow = nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.bn5_narrow   = nn.BatchNorm1d(256)
+        self.mp2_narrow   = nn.MaxPool1d(kernel_size=2, stride=2)
+        
+        self.flatten = nn.Flatten()
         self.fc1_narrow = nn.Linear(256 * seq_len_after_pools, 100)
         self.fc2_narrow = nn.Linear(100, 50)
 
@@ -41,8 +52,11 @@ class MultiScale1DCNN(nn.Module):
         self.conv3_wide = nn.Conv1d(64, 128, kernel_size=5, stride=1, padding=2)
         self.bn3_wide   = nn.BatchNorm1d(128)
 
-        self.conv4_wide = nn.Conv1d(128, 256, kernel_size=5, stride=1, padding=2)
-        self.bn4_wide   = nn.BatchNorm1d(256)
+        self.conv4_wide = nn.Conv1d(128, 128, kernel_size=5, stride=1, padding=2)
+        self.bn4_wide   = nn.BatchNorm1d(128)
+
+        self.conv5_wide = nn.Conv1d(128, 256, kernel_size=5, stride=1, padding=2)
+        self.bn5_wide   = nn.BatchNorm1d(256)
         self.mp2_wide   = nn.MaxPool1d(kernel_size=2, stride=2)
 
         self.fc1_wide = nn.Linear(256 * seq_len_after_pools, 100)
@@ -56,52 +70,54 @@ class MultiScale1DCNN(nn.Module):
         self.output_layer = nn.Linear(100, 4)   # HA 4개 모두 예측
 
     def forward(self, x):
-        # x: (batch, input_feature_dim) -> (batch, 1, L)
+        # x: (batch, input_feature_dim) -> (batch, channels=1, L)
         x = x.unsqueeze(1)
 
         # ----- narrow path -----
-        x_n = self.conv1_narrow(x)
-        # x_n = self.bn1_narrow(x_n)
-        x_n = F.relu(x_n)
+        x_n = F.relu(self.conv1_narrow(x))
+        x_n = self.bn1_narrow(x_n)
+
         x_n = self.mp1_narrow(x_n)
 
-        x_n = self.conv2_narrow(x_n)
-        # x_n = self.bn2_narrow(x_n)
-        x_n = F.relu(x_n)
+        x_n = F.relu(self.conv2_narrow(x_n))
+        x_n = self.bn2_narrow(x_n)
+        
+        x_n = F.relu(self.conv3_narrow(x_n))
+        x_n = self.bn3_narrow(x_n)
+        
+        x_n = F.relu(self.conv4_narrow(x_n))
+        x_n = self.bn4_narrow(x_n)
 
-        x_n = self.conv3_narrow(x_n)
-        # x_n = self.bn3_narrow(x_n)
-        x_n = F.relu(x_n)
+        x_n = F.relu(self.conv5_narrow(x_n))
+        x_n = self.bn5_narrow(x_n)
 
-        x_n = self.conv4_narrow(x_n)
-        # x_n = self.bn4_narrow(x_n)
-        x_n = F.relu(x_n)
         x_n = self.mp2_narrow(x_n)
 
-        x_n = x_n.view(x_n.size(0), -1)
+        x_n = self.flatten(x_n)
         x_n = F.relu(self.fc1_narrow(x_n))
         x_n = F.relu(self.fc2_narrow(x_n))     # (batch, 50)
 
         # ----- wide path -----
-        x_w = self.conv1_wide(x)
-        # x_w = self.bn1_wide(x_w)
-        x_w = F.relu(x_w)
+        x_w = F.relu(self.conv1_wide(x))
+        x_w = self.bn1_wide(x_w)
+
         x_w = self.mp1_wide(x_w)
 
-        x_w = self.conv2_wide(x_w)
-        # x_w = self.bn2_wide(x_w)
-        x_w = F.relu(x_w)
+        x_w = F.relu(self.conv2_wide(x_w))
+        x_w = self.bn2_wide(x_w)
 
-        x_w = self.conv3_wide(x_w)
-        # x_w = self.bn3_wide(x_w)
-        x_w = F.relu(x_w)
+        x_w = F.relu(self.conv3_wide(x_w))
+        x_w = self.bn3_wide(x_w)
 
-        x_w = self.conv4_wide(x_w)
-        # x_w = self.bn4_wide(x_w)
-        x_w = F.relu(x_w)
+        x_w = F.relu(self.conv4_wide(x_w))
+        x_w = self.bn4_wide(x_w)
+        
+        x_w = F.relu(self.conv5_wide(x_w))
+        x_w = self.bn5_wide(x_w)
+
         x_w = self.mp2_wide(x_w)
 
-        x_w = x_w.view(x_w.size(0), -1)
+        x_w = self.flatten(x_w)
         x_w = F.relu(self.fc1_wide(x_w))
         x_w = F.relu(self.fc2_wide(x_w))       # (batch, 50)
 

@@ -4,12 +4,32 @@ batch_size: 8
 num_epochs: 100
 image_size: 560
 num_workers: 0
-cache_root: feature_cache
+learning_rate: 1e-4
 
-# other options you may add later:
-# learning_rate: 1e-4
-# dataset paths, augmentations, etc.
+data_base_path: 'data/original'
+data_image_path: 'texture_image'
+data_label_path: 'ParticipantData.csv'
 
-extraction_batch_size: 8
-extraction_num_workers: 2
-extraction_use_multiprocessing: false
+save_texture_maps: False
+
+# There are 2 options for input:
+#    texture_image: use texture image only
+#    texture_maps: use height map and normal map with texture image
+dataset_input: texture_image
+# There are 2 options for output:
+#    roughness: predict roughness value only
+#    four_HAs: predict four haptic attributes below
+#        rough-smooth
+#        flat-bumpy
+#        sticky-slippery
+#        hard-soft
+dataset_output: roughness
+
+# Choose Model 
+# 1. lr: linear regressor
+# 2. svr: support vector regressor
+# 3. ann: artificial neural network
+# 4. cnn_1d_scirep: 1D-CNN from Taye et al.
+# 5. cnn_1d_4ha: 1D-CNN from Hassan et al.
+# 6. proposed model (TBD)
+model: cnn_1d_4ha

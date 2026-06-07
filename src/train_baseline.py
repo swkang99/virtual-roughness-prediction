@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from torchvision import transforms, models
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error, root_mean_squared_error
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 import pandas as pd
 import yaml
 import time
@@ -18,7 +18,7 @@ import cv2
 from src.data.dataset import build_original_dataframe
 from src.model.feature.glcm import gray_level_co_occurrence_matrix
 from src.model.feature.lbp import extract_lbp_feature
-from src.model.prediction.cnn_1d import MultiScale1DCNN
+from src.model.prediction.compared.cnn_1d_4ha import CNN1D4HA
 
 
 def extract_glcm_features(image_array):
@@ -164,8 +164,8 @@ def train_one_fold(model, train_features, train_targets, device, epochs=200, bat
     return model
 
 
-def baseline_loocv_train(force_cpu=False, epochs=200, batch_size=8, lr=1e-3, weight_decay=1e-4):
-    device = torch.device('cuda') if torch.cuda.is_available() and not force_cpu else torch.device('cpu')
+def baseline_loocv_train(epochs=200, batch_size=8, lr=1e-3, weight_decay=1e-4):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Device: {device}")
 
     full_df = build_original_dataframe()
@@ -177,7 +177,7 @@ def baseline_loocv_train(force_cpu=False, epochs=200, batch_size=8, lr=1e-3, wei
     ])
 
     print("Loading ResNet50...")
-    resnet50 = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
     resnet50.eval()
     resnet50.to(device)
 
@@ -228,7 +228,7 @@ def baseline_loocv_train(force_cpu=False, epochs=200, batch_size=8, lr=1e-3, wei
         y_train = (y_train_raw - y_min) / (y_max - y_min + 1e-8)
         y_test = (y_test_raw - y_min) / (y_max - y_min + 1e-8)
 
-        model = MultiScale1DCNN(input_feature_dim=input_feature_dim).to(device)
+        model = CNN1D4HA(input_feature_dim=input_feature_dim).to(device)
 
         train_start = time.perf_counter()
         model = train_one_fold(
@@ -275,13 +275,13 @@ def baseline_loocv_train(force_cpu=False, epochs=200, batch_size=8, lr=1e-3, wei
     # `mean_absolute_error` and `mean_squared_error` support multioutput; use raw_values to get per-target results
     try:
         mae_per_output = mean_absolute_error(ground_truths, predictions, multioutput='raw_values')
-        rmse_per_output = mean_squared_error(ground_truths, predictions, squared=False, multioutput='raw_values')
+        rmse_per_output = root_mean_squared_error(ground_truths, predictions, squared=False, multioutput='raw_values')
     except Exception:
         # Fallback to manual computation if shapes or sklearn behavior differ
         mae_per_output = np.mean(np.abs(ground_truths - predictions), axis=0)
         rmse_per_output = np.sqrt(np.mean((ground_truths - predictions) ** 2, axis=0))
 
-    cnn_1d = MultiScale1DCNN(input_feature_dim=input_feature_dim)
+    cnn_1d = CNN1D4HA(input_feature_dim=input_feature_dim)
     resnet50_params = count_model_parameters(resnet50)
     cnn_1d_params = count_model_parameters(cnn_1d)
     total_params = resnet50_params + cnn_1d_params
@@ -380,15 +380,13 @@ def baseline_loocv_train(force_cpu=False, epochs=200, batch_size=8, lr=1e-3, wei
 
 def main():
     parser = argparse.ArgumentParser(description='Baseline model LOOCV training with GLCM+LBP+ResNet50+1DCNN')
-    parser.add_argument('--force-cpu', action='store_true', help='Force CPU execution')
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--weight-decay', type=float, default=1e-4)
     args = parser.parse_args()
 
     baseline_loocv_train(
-        force_cpu=args.force_cpu,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

@@ -1,8 +1,10 @@
-import pandas as pd
 import os
-from pathlib import Path
-from src.data.texture_maps import process_texture
 import yaml
+
+import pandas as pd
+from pathlib import Path
+
+from src.data.texture_maps import process_texture
 
 conf = yaml.safe_load('config.yaml')
     

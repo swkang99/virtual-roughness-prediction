@@ -1,24 +1,25 @@
-from PIL import Image
-import numpy as np
-import cv2
-from pathlib import Path
+import yaml
 
+from pathlib import Path
+from PIL import Image
+
+import cv2
+import numpy as np
+
+conf = yaml.safe_load('config.yaml')
 
 def load_grayscale_image(path):
     img = Image.open(path).convert('L')
     arr = np.array(img, dtype=np.float32) / 255.0
     return arr
 
-
 def save_grayscale_image(arr, path):
     arr = np.clip(arr, 0.0, 1.0)
     Image.fromarray((arr * 255).astype(np.uint8), mode='L').save(path)
 
-
 def save_rgb_image(arr, path):
     arr = np.clip(arr, 0, 255).astype(np.uint8)
     Image.fromarray(arr, mode='RGB').save(path)
-
 
 def extract_height_map(gray_img, blur_ksize=5, invert=False, normalize_output=True):
     height = gray_img.copy()
@@ -37,7 +38,6 @@ def extract_height_map(gray_img, blur_ksize=5, invert=False, normalize_output=Tr
             height = (height - hmin) / (hmax - hmin)
 
     return height
-
 
 def extract_normal_map_rgb(height_map, strength=4.0, invert_y=False):
     h = height_map.astype(np.float32)
@@ -62,32 +62,32 @@ def extract_normal_map_rgb(height_map, strength=4.0, invert_y=False):
 
     return normal_rgb
 
-
 def process_texture(texture_path, output_dir="output_maps", blur_ksize=5, strength=4.0, invert=False, invert_y=False):
     texture_path = Path(texture_path)
     output_dir = texture_path.parent.parent / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    gray_img = load_grayscale_image(texture_path)
+    if conf['save_texture_maps']:
+        gray_img = load_grayscale_image(texture_path)
 
-    height_map = extract_height_map(
-        gray_img,
-        blur_ksize=blur_ksize,
-        invert=invert,
-        normalize_output=True
-    )
+        height_map = extract_height_map(
+            gray_img,
+            blur_ksize=blur_ksize,
+            invert=invert,
+            normalize_output=True
+        )
 
-    normal_map_rgb = extract_normal_map_rgb(
-        height_map,
-        strength=strength,
-        invert_y=invert_y
-    )
+        normal_map_rgb = extract_normal_map_rgb(
+            height_map,
+            strength=strength,
+            invert_y=invert_y
+        )
+        
+        save_grayscale_image(height_map, height_path)
+        save_rgb_image(normal_map_rgb, normal_path)
 
     height_path = output_dir / f"{int(texture_path.stem)}_height_map_gray.png"
     normal_path = output_dir / f"{int(texture_path.stem)}_normal_map_rgb.png"
-
-    # save_grayscale_image(height_map, height_path)
-    # save_rgb_image(normal_map_rgb, normal_path)
 
     return str(height_path), str(normal_path)
 

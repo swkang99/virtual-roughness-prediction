@@ -1,4 +1,4 @@
-# Default configuration for training
+# Configuration for training
 feature_extractor: resnet50
 batch_size: 8
 num_epochs: 100

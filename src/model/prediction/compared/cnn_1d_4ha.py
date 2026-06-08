@@ -10,8 +10,13 @@ import torch.nn.functional as F
 
 
 class CNN1D4HA(nn.Module):
-    def __init__(self, input_feature_dim=3955):
+    def __init__(self, conf):
         super(CNN1D4HA, self).__init__()
+
+        if conf['dataset_input'] == 'texture_image':
+            input_feature_dim = 3955
+        elif conf['dataset_input'] == 'texture_maps':
+            input_feature_dim = 3955 * 3
 
         seq_len_after_pools = max(1, input_feature_dim // 4)
 
@@ -66,8 +71,11 @@ class CNN1D4HA(nn.Module):
         # Combined FC + output
         # =========================
         self.fc_combined  = nn.Linear(50 + 50, 100)
-        # self.output_layer = nn.Linear(100, 1)   # roughness 한 축만 예측
-        self.output_layer = nn.Linear(100, 4)   # HA 4개 모두 예측
+
+        if conf['dataset_output'] == 'roughness':
+            self.output_layer = nn.Linear(100, 1)  
+        elif conf['dataset_output'] == 'four_HAs':
+            self.output_layer = nn.Linear(100, 4)  
 
     def forward(self, x):
         # x: (batch, input_feature_dim) -> (batch, channels=1, L)

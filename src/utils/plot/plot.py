@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.data.dataset import build_dataframe
+from src.data.dataframe import build_dataframe
 import yaml
 config_path = Path(__file__).resolve().parent.parent / "config.yaml"
 

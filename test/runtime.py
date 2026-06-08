@@ -5,11 +5,10 @@ import torch
 from torch import nn
 import timm
 
-from src.data.dataset import build_dataframe, CustomRegressionDataset
+from src.data.dataframe import build_dataframe, CustomRegressionDataset
 
 from torchvision import transforms
 
-from src.model.prediction.model import MultiBackBoneRegressor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

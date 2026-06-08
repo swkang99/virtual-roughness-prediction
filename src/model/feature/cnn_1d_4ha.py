@@ -1,16 +1,24 @@
+from pathlib import Path
+from tqdm import tqdm
+import numpy as np
 import torch
+from PIL import Image
+from torchvision import transforms, models
+from torchvision.transforms import InterpolationMode
 from src.model.feature.glcm import gray_level_co_occurrence_matrix
 from src.model.feature.lbp import extract_lbp_feature
-from torch.utils.data import Dataset
-import numpy as np
-from PIL import Image
-from tqdm import tqdm
-from skimage.transform import resize
 
-class FeatureDataset(Dataset):
-    def __init__(self, features, targets):
-        self.features = torch.tensor(features, dtype=torch.float32)
-        self.targets = torch.tensor(targets, dtype=torch.float32)
+class FeatureExtractor:
+    def __init__(self, device):
+        self.device = device
+        self.model_resnet50, self.transform_resnet50 = self.build_resnet50_extractor(self.device)
+        self.transform_spatial = transforms.Compose([
+            transforms.Resize(
+                (1568, 1568), 
+                interpolation=InterpolationMode.BICUBIC,
+                antialias=True),
+            transforms.ToTensor(),
+        ])
 
     def __len__(self):
         return len(self.features)
@@ -18,94 +26,85 @@ class FeatureDataset(Dataset):
     def __getitem__(self, idx):
         return self.features[idx], self.targets[idx]
     
-def extract_glcm_features(image_array):
-    glcm_2d = gray_level_co_occurrence_matrix(image_array)
-    return glcm_2d.flatten().astype(np.float32)
+    def build_resnet50_extractor(self):
+        model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        model.fc = torch.nn.Identity()
+        model.eval()
+        model.to(self.device)
 
+        for p in model.parameters():
+            p.requires_grad = False
 
-def extract_lbp_features(image_array):
-    feature_vector, lbp_maps = extract_lbp_feature(image_array, grid=(7, 7))
-    return np.asarray(feature_vector, dtype=np.float32)
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
 
-
-def extract_resnet50_features(image_tensor, model, device):
+        return model, transform
     
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ])
+    def extract_glcm_features(self, image_array):
+        glcm_2d = gray_level_co_occurrence_matrix(image_array)
+        return glcm_2d.flatten().astype(np.float32)
 
-    print("Loading ResNet50...")
-    resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
-    resnet50.eval()
-    resnet50.to(device)
+    def extract_lbp_features(self, image_array):
+        feature_vector, _ = extract_lbp_feature(image_array, grid=(7, 7))
+        return np.asarray(feature_vector, dtype=np.float32)
 
-    for p in resnet50.parameters():
-        p.requires_grad = False
-    model.eval()
-    with torch.no_grad():
-        features = model(image_tensor.unsqueeze(0).to(device))
-    return features.cpu().numpy().flatten().astype(np.float32)
+    def extract_resnet50_features(self, image_pil):
+        img_tensor = self.transform_resnet50(image_pil)
+        if img_tensor.shape[0] == 1:
+            img_tensor = img_tensor.repeat(3, 1, 1)
 
-def extract_single_image_features(img_path, transform, resnet50, device):
-    texture_img = Image.open(img_path).convert('L') # mode L: Grayscale
-    texture_img_np = np.array(texture_img)
-    texture_img_resized = resize(texture_img_np, (1568, 1568), preserve_range=False, anti_aliasing=False)
-    
-    glcm_feat = extract_glcm_features(texture_img_resized)
+        with torch.no_grad():
+            features = self.model_resnet50(img_tensor.unsqueeze(0).to(self.device))
 
-    lbp_feat = extract_lbp_features(texture_img_resized)
+        return features.cpu().numpy().flatten().astype(np.float32)
 
-    img_tensor = transform(texture_img)
-    if img_tensor.shape[0] == 1:
-        img_tensor = img_tensor.repeat(3, 1, 1) # if image is grayscale, repeat to make 3 channel
-    resnet_feat = extract_resnet50_features(img_tensor, resnet50, device)
-
-    return np.concatenate([glcm_feat, lbp_feat, resnet_feat]).astype(np.float32)
-
-def build_all_features(full_df, transform, resnet50, device):
-    print("Precomputing features for all samples...")
-    all_features = []
-    all_targets = []
-    image_ids = []
-
-    glcm_times = []
-    lbp_times = []
-    resnet_times = []
-
-    for _, row in tqdm(full_df.iterrows(), total=len(full_df), desc="Precompute features", unit="sample"):
-        # texture_img = cv2.imread(row['texture_path'], cv2.IMREAD_GRAYSCALE)
-        # texture_img_resized = cv2.resize(texture_img, dsize=(1568, 1568))
+    def extract_single_image_features(self, img_path):
+        texture_img = Image.open(img_path).convert('L') # mode L: Grayscale
+        texture_img_np = np.array(texture_img)
+        texture_img_resized = self.transform_spatial(texture_img_np)
         
-        # height_img = Image.open(row['height_path']).convert('L')
-        # normal_img = Image.open(row['normal_path']).convert('RGB')
+        glcm_feat = self.extract_glcm_features(texture_img_resized)
+        lbp_feat = self.extract_lbp_features(texture_img_resized)
+
+        img_tensor = self.transform_resnet50(texture_img)
+        if img_tensor.shape[0] == 1:
+            img_tensor = img_tensor.repeat(3, 1, 1) 
+        resnet_feat = self.extract_resnet50_features(img_tensor)
+
+        return np.concatenate([glcm_feat, lbp_feat, resnet_feat]).astype(np.float32)
+
+    def precompute_features_and_targets(self, df, conf, target_col, y_min, y_max):
+        print("Precomputing features for all samples...")
         
-        # gt = float(row['roughness']) # Use roughness only
-        gt = row['haptic_attribute']
- 
-        texture_feat, texture_glcm_time, texture_lbp_time, texture_resnet_time = extract_single_image_features(row['texture_path'], transform, resnet50, device)
-        # normal_feat, normal_glcm_time, normal_lbp_time, normal_resnet_time  = extract_single_image_features(normal_img, transform, resnet50, device)
-        # height_feat, height_glcm_time, height_lbp_time, height_resnet_time  = extract_single_image_features(height_img, transform, resnet50, device)
+        all_features = []
+        all_targets = []
+        image_ids = []
 
-        # combined_feat = np.concatenate([texture_feat, normal_feat, height_feat]).astype(np.float32)
-        combined_feat = texture_feat
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Precompute features", unit="sample"):
+                   
+            if target_col == 'roughness':
+                gt = float(row['roughness'])
+            elif target_col == 'haptic_attribute':
+                gt = row['haptic_attribute']
+                
+            gt = (gt - y_min) / (y_max - y_min + 1e-8)
+            
+            texture_feat = self.extract_single_image_features(row['texture_path'])
+            if conf['dataset_input'] == 'texture_maps':
+                normal_feat = self.extract_single_image_features(row['normal_path'])
+                height_feat = self.extract_single_image_features(row['height_path'])
+                combined_feat = np.concatenate([texture_feat, normal_feat, height_feat]).astype(np.float32)
+            else: 
+                combined_feat = texture_feat
 
-        all_features.append(combined_feat)
-        all_targets.append(gt)
-        image_ids.append(str(int(Path(row['texture_path']).stem)))
+            all_features.append(combined_feat)
+            all_targets.append(gt)
+            image_ids.append(str(int(Path(row['texture_path']).stem)))
 
-        glcm_times.append(texture_glcm_time)
-        # glcm_times.append(normal_glcm_time)
-        # glcm_times.append(height_glcm_time)
-        lbp_times.append(texture_lbp_time)
-        # lbp_times.append(normal_lbp_time)
-        # lbp_times.append(height_lbp_time)
-        resnet_times.append(texture_resnet_time)
-        # resnet_times.append(normal_resnet_time)
-        # resnet_times.append(height_resnet_time)
-    
-    return (
-        np.stack(all_features),
-        np.array(all_targets, dtype=np.float32).reshape(len(all_targets), -1),
-        image_ids,
-    )
+        return (
+            np.stack(all_features),
+            np.array(all_targets, dtype=np.float32).reshape(len(all_targets), -1),
+            image_ids,
+        )

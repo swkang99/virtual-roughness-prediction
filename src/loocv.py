@@ -5,16 +5,16 @@ from tqdm import tqdm
 from sklearn.metrics import mean_absolute_error
     
 from src.data.dataframe import build_dataframe_from_file
-from src.data.dataset import load_cnn_1d_dataset
+from src.data.dataset import load_cnn_1d_dataset, load_original_dataset
 from src.model.train import train_one_fold, evaluate_one_fold
 from src.model.prediction.compared.cnn_1d_4ha import CNN1D4HA
 from src.utils.metrics import metrics
 
 def loocv(conf):
-    epochs = conf['epochs']
-    batch_size = conf['batch_size']
-    lr = conf['learning_rate']
-    weight_decay = conf['weight_decay']
+    epochs = int(conf['epochs'])
+    batch_size = int(conf['batch_size'])
+    lr = float(conf['learning_rate'])
+    weight_decay = float(conf['weight_decay'])
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Device: {device}")
@@ -48,8 +48,14 @@ def loocv(conf):
         y_max = y_train_raw.max(axis=0)  # (4,) or (1,)
 
         model = CNN1D4HA(conf).to(device)
-        train_dataset = load_cnn_1d_dataset(train_df, target_col, y_min=y_min, y_max=y_max)
-        test_dataset  = load_cnn_1d_dataset(test_df, target_col, y_min=y_min, y_max=y_max)
+
+        if conf['model'] == 'cnn_1d_4ha':
+            train_dataset = load_cnn_1d_dataset(train_df, conf, target_col, y_min=y_min, y_max=y_max)
+            test_dataset  = load_cnn_1d_dataset(test_df, conf, target_col, y_min=y_min, y_max=y_max)
+        else:
+            train_dataset = load_original_dataset(train_df)
+            test_dataset = load_original_dataset(test_df)
+            
 
         model = train_one_fold(
             model=model,

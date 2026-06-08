@@ -71,6 +71,8 @@ def loocv(conf):
             model=model,
             dataset=test_dataset,
             device=device,
+            y_min=y_min,
+            y_max=y_max,
         )
     
         predictions.append(preds) 

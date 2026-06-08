@@ -1,16 +1,20 @@
 import numpy as np
 from skimage.feature import graycomatrix
-from skimage import color, img_as_ubyte
+from skimage import color
 
 
 def gray_level_co_occurrence_matrix(img):
 
-    # grayscale 변환
-    if img.ndim == 3:
-        img = color.rgb2gray(img)
-        img = img_as_ubyte(img)
+    img = np.asarray(img)
 
-    # img = resize(img, (1568, 1568), preserve_range=True, anti_aliasing=True)
+    if img.ndim == 3 and img.shape[0] == 1:
+        img = img.squeeze(0)   # (1, H, W) -> (H, W)
+
+    elif img.ndim == 3 and img.shape[-1] == 3:
+        img = color.rgb2gray(img)   # (H, W, 3) -> (H, W)
+
+    elif img.ndim != 2:
+        raise ValueError(f"Unsupported image shape for GLCM: {img.shape}")
 
     # 0–7 범위로 양자화 (8단계)
     img_q = (img // 32).astype(np.uint8)  # 256 → 8단계 (0~7)

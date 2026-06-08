@@ -5,8 +5,9 @@ from tqdm import tqdm
 from sklearn.metrics import mean_absolute_error
     
 from src.data.dataframe import build_dataframe_from_file
-from src.data.dataset import load_cnn_1d_dataset, load_original_dataset
+from src.data.dataset import FeatureDataset, OriginalDataset, NormalizedSubset
 from src.model.train import train_one_fold, evaluate_one_fold
+from src.model.feature.cnn_1d_4ha import FeatureExtractor
 from src.model.prediction.compared.cnn_1d_4ha import CNN1D4HA
 from src.utils.metrics import metrics
 
@@ -21,41 +22,38 @@ def loocv(conf):
 
     full_df = build_dataframe_from_file()
 
+    target_col = (
+        "haptic_attribute" if conf['dataset_output'] == 'four_HAs'
+        else "roughness"
+    )
+
+    if conf['model'] == 'cnn_1d_4ha':
+        feature_extractor = FeatureExtractor(device)
+        full_features, full_targets = feature_extractor.precompute_features_and_targets(
+            full_df, conf, target_col
+        )
+        base_dataset = FeatureDataset(full_features, full_targets)
+    else:
+        base_dataset = OriginalDataset(full_df, conf, target_col)
+
     predictions = []
     ground_truths = []
     test_image_ids = []
 
     print(f"\nStarting LOOCV training with {len(full_df)} samples...")
-
     for test_idx in tqdm(range(len(full_df)), desc="LOOCV", unit="fold"):
 
-        train_mask = np.ones(len(full_df), dtype=bool)
-        train_mask[test_idx] = False
+        train_indices = [i for i in range(len(full_df)) if i != test_idx]
+        test_indices = [test_idx]
 
-        train_df = full_df[train_mask].reset_index(drop=True)
-        test_df  = full_df.iloc[test_idx:test_idx+1].reset_index(drop=True)
+        y_train_raw = full_targets[train_indices]   # shape: (N-1, 4) or (N-1, 1)
+        y_min = y_train_raw.min(axis=0)
+        y_max = y_train_raw.max(axis=0)
 
-        if conf['dataset_output'] == 'four_HAs':
-            target_col = "haptic_attribute"
-            y_train_list = full_df.loc[train_mask, target_col].tolist()
-            y_train_raw = np.array(y_train_list, dtype=np.float32) # (N, 4)
-        elif conf['dataset_output'] == 'roughness':
-            target_col = "roughness"
-            y_train_raw = full_df.loc[train_mask, target_col].to_numpy(dtype=np.float32)
-            y_train_raw = y_train_raw.reshape(-1, 1) # (N, 1)
-
-        y_min = y_train_raw.min(axis=0)  # (4,) or (1,)
-        y_max = y_train_raw.max(axis=0)  # (4,) or (1,)
-
+        train_dataset = NormalizedSubset(base_dataset, train_indices, y_min, y_max)
+        test_dataset  = NormalizedSubset(base_dataset, test_indices, y_min, y_max)
+    
         model = CNN1D4HA(conf).to(device)
-
-        if conf['model'] == 'cnn_1d_4ha':
-            train_dataset = load_cnn_1d_dataset(train_df, conf, target_col, y_min=y_min, y_max=y_max)
-            test_dataset  = load_cnn_1d_dataset(test_df, conf, target_col, y_min=y_min, y_max=y_max)
-        else:
-            train_dataset = load_original_dataset(train_df)
-            test_dataset = load_original_dataset(test_df)
-            
 
         model = train_one_fold(
             model=model,
@@ -77,7 +75,7 @@ def loocv(conf):
     
         predictions.append(preds) 
         ground_truths.append(gts)
-        test_image_ids.append(test_df.loc[0, "texture_path"])
+        test_image_ids.append(full_df.loc[test_idx, "texture_path"])
 
     predictions = np.array(predictions, dtype=np.float32)
     ground_truths = np.array(ground_truths, dtype=np.float32)

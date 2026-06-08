@@ -2,16 +2,14 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from src.model.feature.cnn_1d_4ha import FeatureExtractor
+
 from PIL import Image
 
 class OriginalDataset(Dataset): 
-    def __init__(self, df, conf, target_col, y_min, y_max):
+    def __init__(self, df, conf, target_col):
         self.df = df.reset_index(drop=True).copy()
         self.conf = conf
         self.target_col = target_col
-        self.y_min = np.asarray(y_min, dtype=np.float32)
-        self.y_max = np.asarray(y_max, dtype=np.float32)
 
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
@@ -42,27 +40,36 @@ class OriginalDataset(Dataset):
         elif self.target_col == "roughness":
             label = np.array([row[self.target_col]], dtype=np.float32) # (1,)
 
-        label = (label - self.y_min) / (self.y_max - self.y_min + 1e-8)
+        target = torch.tensor(label, dtype=torch.float32) # raw target
 
         if self.conf['dataset_input'] == 'texture_maps':
-            return texture_image, height_map, normal_map,  torch.tensor(label, dtype=torch.float32)    
+            return texture_image, height_map, normal_map, target    
         elif self.conf['dataset_input'] == 'texture_image':
-            return texture_image, torch.tensor(label, dtype=torch.float32)
-        
-def load_original_dataset(df, conf, target_col, y_min, y_max):
-    return OriginalDataset(df, conf, target_col, y_min, y_max)
+            return texture_image, target
 
 class FeatureDataset(Dataset):
     def __init__(self, features, targets):
         self.features = torch.tensor(features, dtype=torch.float32)
-        self.targets = torch.tensor(targets, dtype=torch.float32)
+        self.targets = torch.tensor(targets, dtype=torch.float32) # raw target
 
     def __len__(self):
         return len(self.features)
 
     def __getitem__(self, idx):
         return self.features[idx], self.targets[idx]
+
+class NormalizedSubset(Dataset):
+    def __init__(self, base_dataset, indices, y_min, y_max):
+        self.base_dataset = base_dataset
+        self.indices = np.asarray(indices)
+        self.y_min = torch.tensor(y_min, dtype=torch.float32)
+        self.y_max = torch.tensor(y_max, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.indices)
     
-def load_cnn_1d_dataset(df, conf, target_col, y_min, y_max):
-    features, targets = FeatureExtractor.precompute_features_and_targets(df, conf, target_col, y_min, y_max)
-    return FeatureDataset(features, targets)
+    def __getitem__(self, idx):
+        real_idx = self.indices[idx]
+        feature, target = self.base_dataset[real_idx]
+        target = (target - self.y_min) / (self.y_max - self.y_min + 1e-8)
+        return feature, target

@@ -5,7 +5,7 @@
 # Training settings
 feature_extractor: resnet50
 batch_size: 8
-epochs: 300
+epochs: 10
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
@@ -33,7 +33,7 @@ dataset_input: texture_maps
 #     - flat-bumpy
 #     - sticky-slippery
 #     - hard-soft
-dataset_output: four_HAs
+dataset_output: roughness
 
 # =============================================================================
 # Model Configuration
@@ -45,5 +45,5 @@ dataset_output: four_HAs
 #   3. ann          : Artificial Neural Network
 #   4. cnn_1d_scirep: 1D-CNN (Taye et al.)
 #   5. cnn_1d_4ha   : 1D-CNN (Hassan et al.)
-#   6. proposed     : Proposed model (TBD)
-model: cnn_1d_4ha
+#   6. transformer  : Proposed Transformer Regressor 
+model: transformer

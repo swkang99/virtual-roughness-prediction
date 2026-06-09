@@ -70,6 +70,14 @@ class NormalizedSubset(Dataset):
     
     def __getitem__(self, idx):
         real_idx = self.indices[idx]
-        feature, target = self.base_dataset[real_idx]
+        sample = self.base_dataset[real_idx]
+
+        if not isinstance(sample, (tuple, list)):
+            raise TypeError(f"Expected tuple/list from base_dataset, got {type(sample)}")
+
+        *features, target = sample
         target = (target - self.y_min) / (self.y_max - self.y_min + 1e-8)
-        return feature, target
+
+        if len(features) == 1:
+            return features[0], target
+        return (*features, target)

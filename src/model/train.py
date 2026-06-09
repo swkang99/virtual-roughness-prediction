@@ -13,15 +13,21 @@ def train_one_fold(model, dataset, device, epochs=200, batch_size=8, lr=1e-3, we
     model.train()
     for epoch in tqdm(range(epochs), desc="Train One Fold"):
         epoch_losses = []
-        for x, y in train_loader:
-            x = x.to(device)
-            y = y.to(device)
+        for batch in train_loader:
+            
+            *inputs, y = batch        
 
-            optimizer.zero_grad()
-            pred = model(x)
+            if len(inputs) == 1:
+                x = inputs[0]
+                pred = model(x)
+            else: 
+                pred = model(*inputs)
+
             if pred.dim() > y.dim():
                 pred = pred.squeeze(-1)
+
             loss = criterion(pred, y)
+            optimizer.zero_grad()    
             loss.backward()
             optimizer.step()
 
@@ -40,11 +46,15 @@ def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=1):
     y_max = np.asarray(y_max, dtype=np.float32)
 
     with torch.no_grad():
-        for x, y in test_loader:
-            x = x.to(device)
-            y = y.to(device)
+        for batch in test_loader:
+            *inputs, y = batch
 
-            pred_norm = model(x)
+            if len(inputs) == 1:
+                x = inputs[0]
+                pred_norm = model(x)
+            else:
+                pred_norm = model(*input)
+                
             if pred_norm.dim() > y.dim():
                 pred_norm = pred_norm.squeeze(-1)
 

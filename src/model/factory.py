@@ -1,5 +1,5 @@
 from src.model.prediction.compared.cnn_1d_4ha import CNN1D4HA
-# from src.model.prediction.compared.cnn_1d_scirep import CNN1DScirep
+from src.model.prediction.compared.cnn_1d_scirep import CNN1DScirep
 # from src.model.prediction.compared.ann import ANN
 # from src.model.prediction.compared.lr import LinearRegressor
 # from src.model.prediction.compared.svr import SVRModel

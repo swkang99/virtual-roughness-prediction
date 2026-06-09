@@ -9,9 +9,9 @@ def main():
         base_conf = yaml.safe_load(f)
 
     model_list = [
-        "lr",
-        "svr",
-        "ann",
+        # "lr",
+        # "svr",
+        # "ann",
         "cnn_1d_scirep",
         "cnn_1d_4ha",
         "transformer",

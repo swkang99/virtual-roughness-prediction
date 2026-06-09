@@ -5,13 +5,13 @@ from tqdm import tqdm
 from sklearn.metrics import mean_absolute_error
     
 from src.data.dataframe import build_dataframe_from_file
-from src.data.dataset import FeatureDataset, OriginalDataset, NormalizedSubset
+from src.data.dataset import NormalizedSubset
+from src.data.factory import build_base_dataset
+from src.model.factory import create_model
 from src.model.train import train_one_fold, evaluate_one_fold
-from src.model.feature.cnn_1d_4ha import FeatureExtractor
-from src.model.prediction.compared.cnn_1d_4ha import CNN1D4HA
 from src.utils.metrics import metrics
 
-def loocv(conf):
+def loocv(conf, model_builder):
     epochs = int(conf['epochs'])
     batch_size = int(conf['batch_size'])
     lr = float(conf['learning_rate'])
@@ -27,14 +27,7 @@ def loocv(conf):
         else "roughness"
     )
 
-    if conf['model'] == 'cnn_1d_4ha':
-        feature_extractor = FeatureExtractor(device)
-        full_features, full_targets = feature_extractor.precompute_features_and_targets(
-            full_df, conf, target_col
-        )
-        base_dataset = FeatureDataset(full_features, full_targets)
-    else:
-        base_dataset = OriginalDataset(full_df, conf, target_col)
+    base_dataset, full_targets = build_base_dataset(conf, full_df, target_col, device)
 
     predictions = []
     ground_truths = []
@@ -53,7 +46,7 @@ def loocv(conf):
         train_dataset = NormalizedSubset(base_dataset, train_indices, y_min, y_max)
         test_dataset  = NormalizedSubset(base_dataset, test_indices, y_min, y_max)
     
-        model = CNN1D4HA(conf).to(device)
+        model = model_builder(conf, input_dim=None, device=device)
 
         model = train_one_fold(
             model=model,
@@ -96,7 +89,7 @@ def main():
     with open('config.yaml', 'r', encoding='utf-8') as f:
         conf = yaml.safe_load(f)
 
-    loocv(conf)
+    loocv(conf, create_model)
 
 if __name__ == '__main__':
     main()

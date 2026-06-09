@@ -1,52 +1,47 @@
-Project: virtual-tactile-property
+# virtual-tactile-property
 
-Input : Texture PBR maps -> Output : Roughness
+A computer vision project for predicting **roughness** from texture-related visual inputs.
 
-Directory
+## Input and Output
+
+- **Texture image** -> Roughness
+- **Texture PBR maps** -> Roughness
+
+## Setup
+
+### Python
+
+A virtual environment satisfying `python>=3.9` is required.
+
+### Dependencies
+
+All dependencies are listed in `requirements.txt`.
+
+Install them with:
+
+```bash
+pip install -r requirements.txt
 ```
-virtual-tactile-property/
-├── config.yaml
-├── README.md
-├── requirements.txt
-├── train.py
-├── val.py
-├── data/    # currently ignored. Please get from your PC
-│   ├── original/
-│   │   ├── adjective_rating_shuffled.csv
-│   │   ├── height_map/
-│   │   ├── normal_map/
-│   │   └── texture_image/
-│   └── split/
-│       ├── train_ids.csv
-│       ├── valid_ids.csv
-│       ├── train/
-│       │   ├── height_map/
-│       │   ├── normal_map/
-│       │   └── texture_image/
-│       └── valid/
-│           ├── height_map/
-│           ├── normal_map/
-│           └── texture_image/
-├── experiments/
-│   ├── checkpoints/
-│   │   ├── {feature_extractor}/
-│   │   │   └── best_model.pth
-│   └── runs/
-│       ├── {feature_extractor}/
-│       │   ├── training_log.csv
-│       │   ├── val_metrics.csv
-│       │   └── val_summary.txt
-└── src/
-    ├── __init__.py
-    ├── engine/   # about feature extracting, training loop
-    │   ├── check_feature_cache.py
-    │   ├── engine.py
-    │   └── extract_feature.py
-    ├── model/    # model definition (class)
-    │   └── model.py
-    └── utils/
-        ├── data.py
-        ├── plot.py
-        ├── running_time_test.py
-        └── split_dataset.py
-```
+
+### Configuration
+
+The configuration values required to reproduce the model are stored in `config.yaml`.
+
+## Reproduction
+
+Run `demo.ipynb` to reproduce the reported results.
+Execute all cells in order, or run the entire notebook at once.
+
+> Note: `reproduction_1d_cnn.ipynb` is **not** related to this project.
+
+## Use of AI / Coding Agents
+
+This project used **Copilot Free** and **Perplexity** during debugging and refactoring.
+
+## Baseline
+
+In this project, performance was compared with the following studies.
+
+> Hassan, W., Joolee, J. B., & Jeon, S. (2023). *Establishing haptic texture attribute space and predicting haptic attributes from image features using 1D-CNN*. Scientific Reports, 13, 11684. https://doi.org/10.1038/s41598-023-38929-6
+
+> Taye, G. T., Hwang, H. J., & Lim, K. M. (2020). *Application of a convolutional neural network for predicting the occurrence of ventricular tachyarrhythmia using heart rate variability features*. Scientific Reports, 10, 6769. https://doi.org/10.1038/s41598-020-63566-8

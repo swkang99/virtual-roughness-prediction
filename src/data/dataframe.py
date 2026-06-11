@@ -5,9 +5,6 @@ import pandas as pd
 from pathlib import Path
 
 from src.data.texture_maps import process_texture
-
-with open('config.yaml', 'r', encoding='utf-8') as f:
-    conf = yaml.safe_load(f)
     
 def _load_roughness_labels(csv_path):
     if not os.path.exists(csv_path):
@@ -17,7 +14,7 @@ def _load_roughness_labels(csv_path):
     ha_list = {str(i + 1): [v + 50 if isinstance(v, (int, float)) else v for v in labels_df.iloc[i].tolist()] for i in range(len(labels_df))}
     return ha_list
 
-def build_dataframe_from_file():
+def build_dataframe_from_file(conf):
     base_path = Path(conf['data_base_path'])
     image_path = Path(conf['data_image_path'])
     label_path = Path(conf['data_label_path'])

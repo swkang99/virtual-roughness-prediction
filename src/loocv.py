@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import yaml
@@ -20,7 +21,7 @@ def loocv(conf, model_builder):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Device: {device}")
 
-    full_df = build_dataframe_from_file()
+    full_df = build_dataframe_from_file(conf)
 
     target_col = (
         "haptic_attribute" if conf['dataset_output'] == 'four_HAs'
@@ -71,6 +72,8 @@ def loocv(conf, model_builder):
     
         predictions.append(preds) 
         ground_truths.append(gts)
+        test_image_id = full_df.loc[test_idx, "texture_path"]
+        test_image_id = os.path.basename(test_image_id)
         test_image_ids.append(full_df.loc[test_idx, "texture_path"])
 
     predictions = np.array(predictions, dtype=np.float32)

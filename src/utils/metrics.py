@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 
 def metrics(conf, mae_per_output, rmse_per_output, predictions, ground_truths, test_image_ids):
-    train_type = conf['train_type']
-    results_dir = Path(f'experiments/runs/{train_type}')
+    train_tag = conf['train_tag']
+    results_dir = Path(f'experiments/runs/{train_tag}')
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Name mapping for each output dimension
@@ -39,15 +39,15 @@ def metrics(conf, mae_per_output, rmse_per_output, predictions, ground_truths, t
         df_data[f'prediction_{name}'] = predictions[:, i]
         df_data[f'abs_error_{name}'] = np.abs(ground_truths[:, i] - predictions[:, i])
     
-    results_csv = results_dir / f'{train_type}_results.csv'
-    metrics_json = results_dir / f'{train_type}_metrics.json'
+    results_csv = results_dir / f'{train_tag}_results.csv'
+    metrics_json = results_dir / f'{train_tag}_metrics.json'
     
     results_df = pd.DataFrame(df_data)
     results_df.to_csv(results_csv, index=False)
     with open(metrics_json, 'w') as f:
         json.dump(metrics, f, indent=2)
 
-    print(f"\n=== Baseline Model LOOCV Training Results ===")
+    print(f"\n=== LOOCV Training Results ===")
     print(f"\nResults saved to {results_dir}")
     print(f"  - CSV: {results_csv}")
     print(f"  - Metrics: {metrics_json}")

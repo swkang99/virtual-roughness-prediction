@@ -23,11 +23,27 @@ Install them with:
 pip install -r requirements.txt
 ```
 
+This project was developed under the following environment:
+
+- GPU: RTX 5080  
+- torch: 2.8.0.dev20250415+cu128  
+- torchvision: 0.22.0.dev20250416+cu128  
+
+
+The `requirements.txt` file does not specify versions for `torch` and `torchvision`.  
+Please install the appropriate versions based on your system configuration, referring to the environment above.
+
+### Data
+> Hassan, W., Joolee, J. B., & Jeon, S. (2023). *Establishing haptic texture attribute space and predicting haptic attributes from image features using 1D-CNN*. Scientific Reports, 13, 11684. https://doi.org/10.1038/s41598-023-38929-6
+
+
 ### Configuration
 
 The configuration values required to reproduce the model are stored in `config.yaml`.
 
 ## Reproduction
+
+The data can be downloaded from the supplementary materials of this study and should be placed in the data/original directory.
 
 Run `demo.ipynb` to reproduce the reported results.
 Execute all cells in order, or run the entire notebook at once.

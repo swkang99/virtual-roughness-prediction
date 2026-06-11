@@ -20,7 +20,7 @@ def main():
     for model_name in model_list:
         conf = copy.deepcopy(base_conf)
         conf["model"] = model_name
-
+        conf["train_tag"] = f'3maps_roughness_{model_name}_300epoch'
         print(f"\n===== Running LOOCV for {model_name} =====")
         loocv(conf, model_builder=create_model)
 

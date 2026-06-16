@@ -16,7 +16,7 @@ train_tag: 'test_metrics'
 # =============================================================================
 
 # Data paths
-data_base_path: 'data/original'
+data_base_path: 'src/data/original'
 data_image_path: 'texture_image'
 data_label_path: 'ParticipantData.csv'
 save_texture_maps: false

@@ -50,7 +50,7 @@ def metrics(conf, mae_per_output, rmse_per_output, predictions, ground_truths, t
     print(f"\n=== LOOCV Training Results ===")
     print(f"\nResults saved to {results_dir}")
     print(f"  - CSV: {results_csv}")
-    print(f"  - Metrics: {metrics_json}")
+    print(f"  - Metrics: {metrics_json}\n")
 
     # Print per-output MAE and RMSE for each named target
     try:

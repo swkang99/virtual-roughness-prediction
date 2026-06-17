@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-def train_one_fold(model, dataset, device, epochs=200, batch_size=8, lr=1e-3, weight_decay=1e-4):
+def train_one_fold(model, dataset, device, epochs, batch_size, lr, weight_decay):
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 
     criterion = nn.MSELoss()

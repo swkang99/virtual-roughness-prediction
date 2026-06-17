@@ -72,9 +72,7 @@ def loocv(conf, model_builder):
     
         predictions.append(preds) 
         ground_truths.append(gts)
-        test_image_id = full_df.loc[test_idx, "texture_path"]
-        test_image_id = os.path.basename(test_image_id)
-        test_image_ids.append(full_df.loc[test_idx, "texture_path"])
+        test_image_ids.append(test_idx)
 
     predictions = np.array(predictions, dtype=np.float32)
     predictions = predictions.reshape(predictions.shape[0], -1)

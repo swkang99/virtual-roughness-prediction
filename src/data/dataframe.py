@@ -11,7 +11,13 @@ def _load_roughness_labels(csv_path):
         return {}
 
     labels_df = pd.read_csv(csv_path, header=None)
-    ha_list = {str(i + 1): [v + 50 if isinstance(v, (int, float)) else v for v in labels_df.iloc[i].tolist()] for i in range(len(labels_df))}
+    ha_list = {
+        str(i + 1): [
+            v + 50 if isinstance(v, (int, float)) else v
+            for v in labels_df.iloc[i].tolist()
+        ]
+        for i in range(len(labels_df))
+    }
     return ha_list
 
 def build_dataframe_from_file(conf):

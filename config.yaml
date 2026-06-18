@@ -5,7 +5,7 @@
 # Training settings
 feature_extractor: resnet50
 batch_size: 128
-epochs: 100
+epochs: 300
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
@@ -24,7 +24,7 @@ save_texture_maps: false
 # Input type (choose one)
 #   texture_image: use texture image only
 #   texture_maps: use height map and normal map with texture image
-dataset_input: texture_image
+dataset_input: texture_maps
 
 # Output type (choose one)
 #   roughness: predict roughness value only
@@ -33,7 +33,7 @@ dataset_input: texture_image
 #     - flat-bumpy
 #     - sticky-slippery
 #     - hard-soft
-dataset_output: roughness
+dataset_output: four_HAs
 
 # =============================================================================
 # Model Configuration
@@ -46,4 +46,4 @@ dataset_output: roughness
 #   4. cnn_1d_scirep: 1D-CNN (Taye et al.)
 #   5. cnn_1d_4ha   : 1D-CNN (Hassan et al.)
 #   6. transformer  : Proposed Transformer Regressor 
-model: cnn_1d_4ha
+model: lr

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 from PIL import Image
@@ -81,3 +82,23 @@ class NormalizedSubset(Dataset):
         if len(features) == 1:
             return features[0], target
         return (*features, target)
+    
+
+def is_torch_model(model):
+    return isinstance(model, nn.Module)
+
+
+def dataset_to_numpy(dataset):
+    loader = DataLoader(dataset, batch_size=len(dataset), shuffle=False, drop_last=False)
+
+    for x, y in loader:
+        X = x.detach().cpu().numpy()
+        y = y.detach().cpu().numpy()
+
+    if X.ndim > 2:
+        X = X.reshape(X.shape[0], -1)
+
+    if y.ndim == 2 and y.shape[1] == 1:
+        y = y.reshape(-1)
+
+    return X, y

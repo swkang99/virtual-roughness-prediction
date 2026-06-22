@@ -1,0 +1,103 @@
+
+[[[ cnn_1d_4ha : 1D-CNN (Hassan et al.) ]]]
+
+(virtual-tactile-property) cglab@cglab:~/Desktop/dev/virtual-tactile-property$ python3 -m src.speed_test_sync
+Device: cuda
+Precomputing features for all samples...
+Precompute features: 100%|█████████████████████████████████████████████████████████| 100/100 [04:07<00:00,  2.47s/sample]
+Number of samples: 100
+Inference batch size: 1
+Warmup iterations: 10
+
+========== Inference Speed ==========
+Total inference time     : 0.233402 sec
+Total samples            : 100
+Total batches            : 100
+Avg time / batch         : 2.3340 ms
+Avg time / sample        : 2.3340 ms
+Throughput               : 428.45 samples/sec
+=====================================
+
+
+[[[ cnn_1d_scirep : 1D-CNN (Taye et al.) ]]]
+
+(virtual-tactile-property) cglab@cglab:~/Desktop/dev/virtual-tactile-property$ python3 -m src.speed_test_sync
+Device: cuda
+Precomputing features for all samples...
+Precompute features: 100%|█████████████████████████████████████████████████████████| 100/100 [04:00<00:00,  2.40s/sample]
+Number of samples: 100
+Inference batch size: 1
+Warmup iterations: 10
+
+========== Inference Speed ==========
+Total inference time     : 0.098642 sec
+Total samples            : 100
+Total batches            : 100
+Avg time / batch         : 0.9864 ms
+Avg time / sample        : 0.9864 ms
+Throughput               : 1013.77 samples/sec
+=====================================
+
+
+[[[ transformer_260618_2 ]]]
+
+(virtual-tactile-property) cglab@cglab:~/Desktop/dev/virtual-tactile-property$ python3 -m src.speed_test_sync
+Device: cuda
+Number of samples: 100
+Inference batch size: 1
+Warmup iterations: 10
+
+========== Inference Speed ==========
+Total inference time     : 0.197547 sec
+Total samples            : 100
+Total batches            : 100
+Avg time / batch         : 1.9755 ms
+Avg time / sample        : 1.9755 ms
+Throughput               : 506.21 samples/sec
+=====================================
+
+
+[[[ transformer_260618_3 ]]]
+
+(virtual-tactile-property) cglab@cglab:~/Desktop/dev/virtual-tactile-property$ python3 -m src.speed_test_sync
+Device: cuda
+Number of samples: 100
+Inference batch size: 1
+Warmup iterations: 10
+
+========== Inference Speed ==========
+Total inference time     : 0.274076 sec
+Total samples            : 100
+Total batches            : 100
+Avg time / batch         : 2.7408 ms
+Avg time / sample        : 2.7408 ms
+Throughput               : 364.86 samples/sec
+=====================================
+
+
+[[[ transformer_260618_1 ]]]
+
+(virtual-tactile-property) cglab@cglab:~/Desktop/dev/virtual-tactile-property$ python3 -m src.speed_test_sync
+Device: cuda
+Number of samples: 100
+Inference batch size: 1
+Warmup iterations: 10
+
+========== Inference Speed ==========
+Total inference time     : 0.241820 sec
+Total samples            : 100
+Total batches            : 100
+Avg time / batch         : 2.4182 ms
+Avg time / sample        : 2.4182 ms
+Throughput               : 413.53 samples/sec
+=====================================
+
+
+
+
+
+
+
+
+
+

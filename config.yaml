@@ -5,7 +5,7 @@
 # Training settings
 feature_extractor: resnet50
 batch_size: 32
-epochs: 10 #1
+epochs: 100 #1
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4

@@ -128,8 +128,8 @@ class CNN1D4HA(nn.Module):
         x_c = torch.cat((x_n, x_w), dim=1)     # (batch, 100)
         x_c = F.relu(self.fc_combined(x_c))    # (batch, 100)
 
-        # 회귀 + Sigmoid
+        # Regression + Sigmoid
         out = self.output_layer(x_c)           # (batch, 1)
-        out = torch.sigmoid(out)               # 논문: Sigmoid activation
+        out = torch.sigmoid(out)               # In the Paper: Sigmoid activation
 
         return out

@@ -4,12 +4,12 @@
 
 # Training settings
 feature_extractor: resnet50
-batch_size: 32
-epochs: 100 #1
+batch_size: 128
+epochs: 300
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
-train_tag: 'test_metrics'
+train_tag: 'svr'
 
 # =============================================================================
 # Data Configuration
@@ -40,10 +40,12 @@ dataset_output: roughness
 # =============================================================================
 
 # Model options:
-#   1. lr           : Linear Regressor
-#   2. svr          : Support Vector Regressor
-#   3. ann          : Artificial Neural Network
-#   4. cnn_1d_scirep: 1D-CNN (Taye et al.)
-#   5. cnn_1d_4ha   : 1D-CNN (Hassan et al.)
-#   6. transformer  : Proposed Transformer Regressor 
-model: transformer #cnn_1d_4ha
+#   1. lr             : Linear Regressor
+#   2. svr            : Support Vector Regressor
+#   3. ann            : Artificial Neural Network
+#   4. cnn_1d_scirep  : 1D-CNN (Taye et al.)
+#   5. cnn_1d_4ha     : 1D-CNN (Hassan et al.)
+#   6. transformer    : Proposed Transformer Regressor 
+#   7. cnn_1d_generic : Proposed 1D-CNN for comparing with Gated Fusion MLP
+#   8. gated_mlp      : Proposed Gated Fusion MLP
+model: gated_mlp

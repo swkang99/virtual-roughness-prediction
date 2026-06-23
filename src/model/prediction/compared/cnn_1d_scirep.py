@@ -40,12 +40,17 @@ class CNN1DScirep(nn.Module):
             dummy = torch.zeros(1, 1, feature_dim)
             flat_dim = self.features(dummy).flatten(1).shape[1]
 
+        if conf['dataset_output'] == 'roughness':
+            out_dim = 1
+        elif conf['dataset_output'] == 'four_HAs':
+            out_dim = 4
+
         self.regressor = nn.Sequential(
             nn.Linear(flat_dim, 22),
             nn.ReLU(),
             nn.Linear(22, 22),
             nn.ReLU(),
-            nn.Linear(22, 1),
+            nn.Linear(22, out_dim),
         )
 
     def forward(self, x):

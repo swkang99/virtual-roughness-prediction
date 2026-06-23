@@ -11,6 +11,7 @@ from src.data.factory import build_base_dataset
 from src.model.factory import create_model
 from src.model.train import train_one_fold, evaluate_one_fold
 from src.utils.metrics import metrics
+from pathlib import Path
 
 def loocv(conf, model_builder):
     epochs = int(conf['epochs'])
@@ -21,7 +22,12 @@ def loocv(conf, model_builder):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Device: {device}")
 
-    full_df = build_dataframe_from_file(conf)
+    full_df = build_dataframe_from_file(
+        conf,
+        texture_path = Path(conf['data_base_path']) / Path(conf['data_image_path']),
+        label_path = Path(conf['data_base_path']) / Path(conf['data_label_path']),
+        header=None,
+    )
 
     target_col = (
         "haptic_attribute" if conf['dataset_output'] == 'four_HAs'

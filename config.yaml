@@ -4,26 +4,26 @@
 
 # Training settings
 feature_extractor: resnet50
-batch_size: 128
+batch_size: 64
 epochs: 300
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
-train_tag: 'svr'
-
+train_tag: 'transformer'
+ 
 # =============================================================================
 # Data Configuration
 # =============================================================================
 
 # Data paths
-data_base_path: 'data/original'
+data_base_path: 'src/data/original'
 data_image_path: 'texture_image'
 data_label_path: 'ParticipantData.csv'
 
 data_patch_path: 'patches'
-data_train_path: 'data/split/train'
-data_val_path: 'data/split/val'
-data_test_path: 'data/split/test'
+data_train_path: 'src/data/split/train'
+data_val_path: 'src/data/split/val'
+data_test_path: 'src/data/split/test'
 
 # Input type (choose one)
 #   texture_image: use texture image only
@@ -52,4 +52,4 @@ dataset_output: roughness
 #   6. transformer    : Proposed Transformer Regressor 
 #   7. cnn_1d_generic : Proposed 1D-CNN for comparing with Gated Fusion MLP
 #   8. gated_mlp      : Proposed Gated Fusion MLP
-model: gated_mlp
+model: transformer

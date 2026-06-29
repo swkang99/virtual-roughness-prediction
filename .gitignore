@@ -204,7 +204,9 @@ $RECYCLE.BIN/
 .vscode/
 
 # Data directory
-/data/
+/src/data/split/
+/checkpoints/
 /experiments/
-/feature_cache/
-/output/
+/src/feature_cache/
+/src/output/
+

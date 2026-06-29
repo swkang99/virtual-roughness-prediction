@@ -174,7 +174,7 @@ def test_model(config_conf):
 
     train_tag = str(config_conf.get("train_tag", config_conf["model"]))
     checkpoint_root = Path(config_conf.get("checkpoint_root", "checkpoints"))
-    checkpoint_name = config_conf.get("test_checkpoint_name", "last.pt")#"best_val_rmse.pt")
+    checkpoint_name = config_conf.get("test_checkpoint_name", "best_val_rmse.pt")
 
     checkpoint_path = checkpoint_root / train_tag / checkpoint_name
 

@@ -3,7 +3,7 @@ from src.model.prediction.compared.cnn_1d_scirep import CNN1DScirep
 from src.model.prediction.compared.ann import ANN
 from sklearn import linear_model
 from sklearn.svm import SVR
-from src.model.prediction.proposed.transformer.transformer_260623_1 import TransformerRegressor
+from src.model.prediction.proposed.transformer.transformer_model_H import TransformerRegressor
 from src.model.prediction.compared.cnn_1d_generic import CNN1DGeneric
 from src.model.prediction.proposed.gated_mlp import GatedFusionRegressor
 

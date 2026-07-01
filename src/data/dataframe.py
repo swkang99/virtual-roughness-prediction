@@ -3,24 +3,23 @@ import pandas as pd
 from src.data.texture_maps import process_texture
 from tqdm import tqdm
     
-def _load_ha_labels(csv_path, header=None, normalized=True):
+def _load_ha_labels(csv_path, header=None):
     if not os.path.exists(csv_path):
         return {}
 
     labels_df = pd.read_csv(csv_path, header=header)
     ha_list = {
         str(i + 1): [
-            v + 50 if isinstance(v, (int, float)) and normalized else v
-            for v in labels_df.iloc[i].tolist()
+            v for v in labels_df.iloc[i].tolist()
         ]
         for i in range(len(labels_df))
     }
     return ha_list
 
 
-def build_dataframe_from_file(conf, texture_path, label_path, header):
+def build_dataframe_from_file(texture_path, label_path, header):
 
-    label_map = _load_ha_labels(label_path, header=header, normalized=False)
+    label_map = _load_ha_labels(label_path, header=header)
 
     texture_files = [
         p for p in texture_path.iterdir()

@@ -258,7 +258,6 @@ class Trainer:
         texture_path = base_path / Path(self.conf['data_patch_path'])
         label_path = base_path / Path(f"{split_name}.csv")
         return build_dataframe_from_file(
-            self.conf,
             texture_path=texture_path,
             label_path=label_path,
             header=0,

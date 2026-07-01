@@ -49,12 +49,6 @@ The data can be downloaded from the supplementary materials of study [1] and sho
 Run `demo.ipynb` to reproduce the reported results.
 Execute all cells in order, or run the entire notebook at once.
 
-### reproduction_1d_cnn.ipynb
-`reproduction_1d_cnn.ipynb` is reproduction of study [1], prediction of 4 haptic attributes same as the paper. 
-The feature data and label were taken from the respective .csv files. 
-For label data, since `ParticipantData.csv` is stored in the range of -50 to 50, we add 50 to all values when loading the data to convert them to the range of 0 to 100. 
-Once the virtual environment have set up, the training can reproduce by running all the cells.
-
 
 ## Reference
 

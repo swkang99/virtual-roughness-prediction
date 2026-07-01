@@ -1,18 +1,13 @@
 import numpy as np
+from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-from PIL import Image
-
-class OriginalDataset(Dataset): 
+class PatchDataset(Dataset): 
     def __init__(self, df):
         self.df = df.reset_index(drop=True).copy()
-
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-        ])
+        self.transform = transforms.Compose([transforms.ToTensor()])
 
     def __len__(self):
         return len(self.df)
@@ -31,13 +26,13 @@ class OriginalDataset(Dataset):
         normal_path = row["normal_path"]
         normal_map = Image.open(normal_path).convert("L")
         normal_map = self.transform(normal_map)
-
-        label = np.array([row["roughness"]], dtype=np.float32)
-        target = torch.tensor(label, dtype=torch.float32)
+        
+        label = np.array([row["roughness"]], dtype=np.float32) # (1,)
+        target = torch.tensor(label, dtype=torch.float32) # raw target
 
         return texture_image, height_map, normal_map, target
-
-class FeatureDataset(Dataset):
+        
+class PatchFeatureDataset(Dataset):
     def __init__(self, features, targets):
         self.features = torch.tensor(features, dtype=torch.float32)
         self.targets = torch.tensor(targets, dtype=torch.float32) # raw target
@@ -47,20 +42,7 @@ class FeatureDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.features[idx], self.targets[idx]
-
-class SeparatedDataset(Dataset):
-    def __init__(self, texture_feats, height_feats, normal_feats, targets):
-        self.texture_feats = torch.tensor(texture_feats, dtype=torch.float32)
-        self.height_feats = torch.tensor(height_feats, dtype=torch.float32)
-        self.normal_feats = torch.tensor(normal_feats, dtype=torch.float32)
-        self.targets = torch.tensor(targets, dtype=torch.float32) # raw target
-
-    def __len__(self):
-        return len(self.targets)
-
-    def __getitem__(self, idx):
-        return (self.texture_feats[idx], self.height_feats[idx], self.normal_feats[idx], self.targets[idx])
-
+    
 class NormalizedSubset(Dataset):
     def __init__(self, base_dataset, indices, y_min, y_max):
         self.base_dataset = base_dataset

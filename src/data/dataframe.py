@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from src.data.texture_maps import process_texture
+from tqdm import tqdm
     
 def _load_ha_labels(csv_path, header=None, normalized=True):
     if not os.path.exists(csv_path):
@@ -28,18 +29,19 @@ def build_dataframe_from_file(conf, texture_path, label_path, header):
     texture_files = sorted(texture_files, key=lambda p: int(p.stem) if p.stem.isdigit() else p.stem)
 
     rows = []
-    for tex_path in texture_files:
-        sid = tex_path.stem
-        height_dir, normal_dir = process_texture(tex_path, save_texture_maps=True)
+    for tex_path in tqdm(texture_files, total=len(texture_files), desc="Build Dataframe from file"):
+        sid = tex_path.stem.split('_')[0]
+        height_dir, normal_dir = process_texture(tex_path, save_texture_maps=False)
         
-        haptic_attribute_list = label_map.get(sid)
+        # haptic_attribute_list = label_map.get(sid)
+        haptic_attribute = [v[1] for v in label_map.values() if int(v[0]) == int(sid)]
 
         row = {
             'texture_path': str(tex_path),
         }
 
         if conf['dataset_input'] == 'texture_maps':
-            row.update({
+            row.update({ # Change this code to get maps not from files
                 'normal_path': normal_dir,
                 'height_path': height_dir,
             })
@@ -47,33 +49,14 @@ def build_dataframe_from_file(conf, texture_path, label_path, header):
             raise ValueError(f"Unsupported dataset_input: {conf['dataset_input']}")
 
         if conf['dataset_output'] == 'four_HAs':
-            row['haptic_attribute'] = haptic_attribute_list
+            row['haptic_attribute'] = haptic_attribute
         elif conf['dataset_output'] == 'roughness':
-            row['roughness'] = float(haptic_attribute_list[0])
+            row['roughness'] = float(haptic_attribute[0])
+            # patch_id = int(tex_path.stem.split('_')[2])
+            # print(f'processing texture {sid} - patch {patch_id + 1} complete.')
         else:
             raise ValueError(f"Unsupported dataset_output: {conf['dataset_output']}")
 
         rows.append(row)
 
     return pd.DataFrame(rows)
-
-# train_df = build_dataframe_from_file(
-#     conf, 
-#     texture_path = Path(conf['data_train_path']) / Path(conf['data_patch_path']),
-#     label_path = Path(conf['data_train_path']) / Path('train.csv'),
-#     header=0,
-# )
-
-# val_df = build_dataframe_from_file(
-#     conf, 
-#     texture_path = Path(conf['data_val_path']) / Path(conf['data_patch_path']),
-#     label_path = Path(conf['data_val_path']) / Path('val.csv'),
-#     header=0,
-# )
-
-# test_df = build_dataframe_from_file(
-#     conf, 
-#     texture_path = Path(conf['data_test_path']) / Path(conf['data_patch_path']),
-#     label_path = Path(conf['data_test_path']) / Path('test.csv'),
-#     header=0,
-# )

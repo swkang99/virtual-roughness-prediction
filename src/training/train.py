@@ -4,10 +4,11 @@ from torch.utils.data import DataLoader
 from src.data.dataset import dataset_to_numpy
 from tqdm import tqdm
 from src.model.prediction.proposed.gated_mlp import GatedFusionRegressor
+from src.model.prediction.proposed.gated_mlp_v2 import GatedFusionRegressorV2
 import numpy as np
 
 def is_gated_mlp(model):
-    return isinstance(model, GatedFusionRegressor)
+    return isinstance(model, GatedFusionRegressor) or isinstance(model, GatedFusionRegressorV2)
 
 def is_torch_model(model):
     return isinstance(model, torch.nn.Module)
@@ -136,7 +137,20 @@ def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=32):
         if y_norm.ndim == 1:
             y_norm = y_norm.reshape(-1, 1)
 
+    y_min = y_min.item()
+    y_max = y_max.item()
     pred_raw = pred_norm * (y_max - y_min + 1e-8) + y_min
     gt_raw = y_norm * (y_max - y_min + 1e-8) + y_min
 
     return pred_raw, gt_raw
+
+def main():
+    # prepare dataset (train, val)
+    # load model
+    # evaluate
+    # metric
+    # save model
+    pass
+
+if __name__ == '__main__':
+    main()    

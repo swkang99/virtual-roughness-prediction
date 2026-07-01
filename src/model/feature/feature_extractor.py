@@ -12,10 +12,10 @@ class FeatureExtractor:
         self.device = device
         self.model_resnet50, self.transform_resnet50 = self.build_resnet50_extractor()
         self.transform_spatial = transforms.Compose([
-            transforms.Resize(
-                (1568, 1568), 
-                interpolation=InterpolationMode.BICUBIC,
-                antialias=True),
+            # transforms.Resize(
+            #     (1568, 1568), 
+            #     interpolation=InterpolationMode.BICUBIC,
+            #     antialias=True),
             transforms.ToTensor(),
         ])
     
@@ -115,7 +115,7 @@ class FeatureExtractor:
         )
     
     def precompute_features_and_targets_separated(self, df, conf, target_col):
-        print("Precomputing features for all samples...")
+        print("Precomputing features for separated samples...")
         
         texture_feats = []
         height_feats = []
@@ -125,7 +125,7 @@ class FeatureExtractor:
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Precompute features", unit="sample"):
             gt = row['roughness']
         
-            texture_feat = self.extract_single_image_features(row['texture_path'])
+            texture_feat = self.extract_texture_descriptor(row['texture_path'])
             height_feat, normal_feat = self.extract_geometric_statistical_features(row['height_path'], row['normal_path'])
 
             texture_feats.append(texture_feat)

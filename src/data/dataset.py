@@ -66,7 +66,7 @@ class SeparatedDataset(Dataset):
         self.targets = torch.tensor(targets, dtype=torch.float32) # raw target
 
     def __len__(self):
-        return len(self.features)
+        return len(self.targets)
 
     def __getitem__(self, idx):
         return (self.texture_feats[idx], self.height_feats[idx], self.normal_feats[idx], self.targets[idx])
@@ -75,8 +75,8 @@ class NormalizedSubset(Dataset):
     def __init__(self, base_dataset, indices, y_min, y_max):
         self.base_dataset = base_dataset
         self.indices = np.asarray(indices)
-        self.y_min = torch.tensor(y_min, dtype=torch.float32)
-        self.y_max = torch.tensor(y_max, dtype=torch.float32)
+        self.y_min = torch.as_tensor(y_min, dtype=torch.float32)
+        self.y_max = torch.as_tensor(y_max, dtype=torch.float32)
 
     def __len__(self):
         return len(self.indices)

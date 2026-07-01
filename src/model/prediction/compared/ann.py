@@ -9,7 +9,7 @@ class ANN(nn.Module):
         super().__init__()
         
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(input_dim, 200)
+        self.fc1 = nn.Linear(3020, 200)
         self.fc2 = nn.Linear(200, 100)
 
         if conf['dataset_output'] == 'roughness':

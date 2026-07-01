@@ -3,14 +3,15 @@ from src.data.dataset import FeatureDataset, OriginalDataset, SeparatedDataset
 from src.model.feature.feature_extractor import FeatureExtractor
 
 MODEL_DATASET_TYPE = {
-    "lr": "feature",
-    "svr": "feature",
+    "lr": "separated",
+    "svr": "separated",
     "ann": "separated",
     "cnn_1d_scirep": "feature",
-    "cnn_1d_4ha": "feature",
+    "cnn_1d_4ha": "separated",
     "transformer": "original",
     "cnn_1d_generic": "separated",
     "gated_mlp": "separated",
+    "gated_mlp_v2": "separated",
 }
 
 def build_feature_base_dataset(conf, full_df, target_col, device):

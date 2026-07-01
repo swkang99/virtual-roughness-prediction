@@ -9,7 +9,7 @@ epochs: 300
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
-train_tag: 'svr'
+train_tag: 'patch_dataset'
 
 # =============================================================================
 # Data Configuration
@@ -52,4 +52,4 @@ dataset_output: roughness
 #   6. transformer    : Proposed Transformer Regressor 
 #   7. cnn_1d_generic : Proposed 1D-CNN for comparing with Gated Fusion MLP
 #   8. gated_mlp      : Proposed Gated Fusion MLP
-model: gated_mlp
+model: gated_mlp_v2

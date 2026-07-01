@@ -9,11 +9,13 @@ from src.data.dataframe import build_dataframe_from_file
 from src.data.dataset import NormalizedSubset
 from src.data.factory import build_base_dataset
 from src.model.factory import create_model
-from src.model.train import train_one_fold, evaluate_one_fold
+from src.training.train import train_one_fold, evaluate_one_fold
 from src.utils.metrics import metrics
 from pathlib import Path
 
 def loocv(conf, model_builder):
+    print(f"\n===== Running LOOCV for {conf["model"]} =====")
+    
     epochs = int(conf['epochs'])
     batch_size = int(conf['batch_size'])
     lr = float(conf['learning_rate'])

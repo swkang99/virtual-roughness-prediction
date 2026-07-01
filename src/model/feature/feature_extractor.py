@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from PIL import Image
 from torchvision import transforms, models
-from torchvision.transforms import InterpolationMode
 from src.model.feature.glcm import gray_level_co_occurrence_matrix
 from src.model.feature.lbp import extract_lbp_feature
 from src.model.feature.geometry_statistic import load_height_map, load_normal_map, extract_height_features, extract_normal_features, HEIGHT_KEYS, NORMAL_KEYS, dict_to_ordered_vector
@@ -11,13 +10,7 @@ class FeatureExtractor:
     def __init__(self, device):
         self.device = device
         self.model_resnet50, self.transform_resnet50 = self.build_resnet50_extractor()
-        self.transform_spatial = transforms.Compose([
-            # transforms.Resize(
-            #     (1568, 1568), 
-            #     interpolation=InterpolationMode.BICUBIC,
-            #     antialias=True),
-            transforms.ToTensor(),
-        ])
+        self.transform_spatial = transforms.Compose([transforms.ToTensor(),])
     
     def build_resnet50_extractor(self):
         model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -85,26 +78,19 @@ class FeatureExtractor:
 
         return height_vec, normal_vec
 
-    def precompute_features_and_targets(self, df, conf, target_col):
+    def precompute_features_and_targets(self, df):
         print("Precomputing features for all samples...")
         
         all_features = []
         all_targets = []
 
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Precompute features", unit="sample"):
-                   
-            if target_col == 'roughness':
-                gt = float(row['roughness'])
-            elif target_col == 'haptic_attribute':
-                gt = row['haptic_attribute']
+            gt = float(row['roughness'])
             
             texture_feat = self.extract_single_image_features(row['texture_path'])
-            if conf['dataset_input'] == 'texture_maps':
-                normal_feat = self.extract_single_image_features(row['normal_path'])
-                height_feat = self.extract_single_image_features(row['height_path'])
-                combined_feat = np.concatenate([texture_feat, normal_feat, height_feat]).astype(np.float32)
-            else: 
-                combined_feat = texture_feat
+            normal_feat = self.extract_single_image_features(row['normal_path'])
+            height_feat = self.extract_single_image_features(row['height_path'])
+            combined_feat = np.concatenate([texture_feat, normal_feat, height_feat]).astype(np.float32)
 
             all_features.append(combined_feat)
             all_targets.append(gt)
@@ -114,7 +100,7 @@ class FeatureExtractor:
             np.array(all_targets, dtype=np.float32).reshape(len(all_targets), -1),
         )
     
-    def precompute_features_and_targets_separated(self, df, conf, target_col):
+    def precompute_features_and_targets_separated(self, df):
         print("Precomputing features for separated samples...")
         
         texture_feats = []
@@ -123,7 +109,7 @@ class FeatureExtractor:
         all_targets = []
 
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Precompute features", unit="sample"):
-            gt = row['roughness']
+            gt = float(row['roughness'])
         
             texture_feat = self.extract_texture_descriptor(row['texture_path'])
             height_feat, normal_feat = self.extract_geometric_statistical_features(row['height_path'], row['normal_path'])

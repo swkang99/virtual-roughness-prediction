@@ -6,10 +6,8 @@ from torchvision import transforms
 from PIL import Image
 
 class OriginalDataset(Dataset): 
-    def __init__(self, df, conf, target_col):
+    def __init__(self, df):
         self.df = df.reset_index(drop=True).copy()
-        self.conf = conf
-        self.target_col = target_col
 
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
@@ -26,26 +24,18 @@ class OriginalDataset(Dataset):
         texture_image = Image.open(texture_path).convert("L")
         texture_image = self.transform(texture_image)
 
-        if self.conf['dataset_input'] == 'texture_maps':
-            height_path = row["height_path"]
-            height_map = Image.open(height_path).convert("L")
-            height_map = self.transform(height_map)
+        height_path = row["height_path"]
+        height_map = Image.open(height_path).convert("L")
+        height_map = self.transform(height_map)
 
-            normal_path = row["normal_path"]
-            normal_map = Image.open(normal_path).convert("L")
-            normal_map = self.transform(normal_map)
-        
-        if self.target_col == "haptic_attribute": # (4,)
-            label = np.array(row[self.target_col], dtype=np.float32)
-        elif self.target_col == "roughness":
-            label = np.array([row[self.target_col]], dtype=np.float32) # (1,)
+        normal_path = row["normal_path"]
+        normal_map = Image.open(normal_path).convert("L")
+        normal_map = self.transform(normal_map)
 
-        target = torch.tensor(label, dtype=torch.float32) # raw target
+        label = np.array([row["roughness"]], dtype=np.float32)
+        target = torch.tensor(label, dtype=torch.float32)
 
-        if self.conf['dataset_input'] == 'texture_maps':
-            return texture_image, height_map, normal_map, target    
-        elif self.conf['dataset_input'] == 'texture_image':
-            return texture_image, target
+        return texture_image, height_map, normal_map, target
 
 class FeatureDataset(Dataset):
     def __init__(self, features, targets):

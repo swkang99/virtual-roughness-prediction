@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 
 class CNN1D4HA(nn.Module):
-    def __init__(self, conf, feature_dim):
+    def __init__(self, feature_dim):
         super(CNN1D4HA, self).__init__()
 
         seq_len_after_pools = max(1, feature_dim // 4)
@@ -67,10 +67,7 @@ class CNN1D4HA(nn.Module):
         # =========================
         self.fc_combined  = nn.Linear(50 + 50, 100)
 
-        if conf['dataset_output'] == 'roughness':
-            self.output_layer = nn.Linear(100, 1)  
-        elif conf['dataset_output'] == 'four_HAs':
-            self.output_layer = nn.Linear(100, 4)  
+        self.output_layer = nn.Linear(100, 1)
 
     def forward(self, x):
         # x: (batch, input_feature_dim) -> (batch, channels=1, L)

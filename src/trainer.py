@@ -226,10 +226,7 @@ class Trainer:
                 - full_targets: NumPy array of shape (N, D) or (N,)
                 - input_dim: Input dimension or None
         """
-        target_col = (
-            "haptic_attribute" if self.conf['dataset_output'] == 'four_HAs'
-            else "roughness"
-        )
+        target_col = "roughness"
         
         base_dataset, full_targets, input_dim = build_base_dataset(
             self.conf, full_df, target_col, self.device
@@ -252,15 +249,6 @@ class Trainer:
         y_min = y_train_raw.min(axis=0)
         y_max = y_train_raw.max(axis=0)
         return y_min, y_max
-    
-    def get_target_col(self):
-        """
-        Pick the target column name from configuration.
-        """
-        return (
-            "haptic_attribute" if self.conf['dataset_output'] == 'four_HAs'
-            else "roughness"
-        )
     
     def build_split_dataframe(self, split_name):
         """
@@ -396,73 +384,7 @@ class Trainer:
         )
         return preds, gts
     
-    def fit_loocv(self, full_df, base_dataset, full_targets):
-        """
-        Perform Leave-One-Out Cross-Validation training.
-        Reproduces the original loocv.py behavior exactly.
-        
-        Args:
-            full_df (pd.DataFrame): Full dataframe
-            base_dataset: Base dataset object
-            full_targets (np.ndarray): Full targets array
-        
-        Returns:
-            tuple: (predictions, ground_truths)
-        """
-        n = len(full_df)
-        predictions = []
-        ground_truths = []
-        test_image_ids = []
-        
-        if self.verbose:
-            print(f"\nStarting LOOCV training with {n} samples...")
-        
-        from tqdm import tqdm
-        for test_idx in tqdm(range(n), desc="LOOCV", unit="fold"):
-            train_indices = [i for i in range(n) if i != test_idx]
-            test_indices = [test_idx]
-            
-            # Compute normalization from training set
-            y_train_raw = full_targets[train_indices]
-            if y_train_raw.ndim == 1:
-                y_train_raw = y_train_raw.reshape(-1, 1)
-            y_min, y_max = self.compute_y_norm(y_train_raw)
-            
-            # Create normalized subsets
-            train_dataset = self.make_normalized_subset(base_dataset, train_indices, y_min, y_max)
-            test_dataset = self.make_normalized_subset(base_dataset, test_indices, y_min, y_max)
-            
-            # Fit and evaluate
-            model, _ = self.fit(train_dataset, val_dataset=None)
-            preds, gts = self.evaluate(model, test_dataset)
-            
-            predictions.append(preds)
-            ground_truths.append(gts)
-            test_image_ids.append(test_idx)
-        
-        # Aggregate results (identical to original loocv.py)
-        predictions = np.array(predictions, dtype=np.float32)
-        predictions = predictions.reshape(predictions.shape[0], -1)
-        ground_truths = np.array(ground_truths, dtype=np.float32)
-        ground_truths = ground_truths.reshape(ground_truths.shape[0], -1)
-        
-        # Compute metrics
-        mae_per_output = mean_absolute_error(ground_truths, predictions, multioutput='raw_values')
-        rmse_per_output = np.sqrt(np.mean((ground_truths - predictions) ** 2, axis=0))
-        
-        # Call metrics (original flow)
-        metrics(
-            self.conf,
-            mae_per_output=mae_per_output,
-            rmse_per_output=rmse_per_output,
-            predictions=predictions,
-            ground_truths=ground_truths,
-            test_image_ids=test_image_ids,
-        )
-        
-        return predictions, ground_truths
-    
-    def _get_or_build_split_dataset(self, split_name, target_col, y_min=None, y_max=None):
+    def _get_or_build_split_dataset(self, split_name, y_min=None, y_max=None):
         """
         Build and cache a normalized split dataset.
         The cache is shared across Trainer instances so repeated experiments
@@ -472,8 +394,6 @@ class Trainer:
         cache_key = (
             split_name,
             dataset_type,
-            self.conf.get('dataset_input'),
-            self.conf.get('dataset_output'),
             self.conf.get('data_patch_path'),
             self.conf.get(f'data_{split_name}_path'),
         )
@@ -489,7 +409,7 @@ class Trainer:
             raise ValueError(f'Unsupported split name: {split_name}')
 
         base_dataset, targets, input_dim = build_base_dataset(
-            self.conf, df, target_col, self.device
+            self.conf, df, self.device
         )
 
         if y_min is None or y_max is None:
@@ -528,11 +448,10 @@ class Trainer:
                 - 'test': Test results (dict with 'preds', 'gts') or None
                 - 'metrics': Aggregated metrics dict or None
         """
-        target_col = self.get_target_col()
 
         if train_df is not None:
             train_base, train_targets, input_dim = build_base_dataset(
-                self.conf, train_df, target_col, self.device
+                self.conf, train_df, self.device
             )
             y_min, y_max = self.compute_y_norm(train_targets)
             train_dataset = self.make_normalized_subset(
@@ -540,29 +459,29 @@ class Trainer:
             )
             self.input_dim = input_dim
         else:
-            train_cache = self._get_or_build_split_dataset('train', target_col)
+            train_cache = self._get_or_build_split_dataset('train')
             train_dataset = train_cache['dataset']
             self.input_dim = train_cache['input_dim']
 
         if val_df is not None:
-            val_base, _, _ = build_base_dataset(self.conf, val_df, target_col, self.device)
+            val_base, _, _ = build_base_dataset(self.conf, val_df, self.device)
             val_dataset = self.make_normalized_subset(
                 val_base, list(range(len(val_base))), train_dataset.y_min, train_dataset.y_max
             )
         else:
             val_cache = self._get_or_build_split_dataset(
-                'val', target_col, train_dataset.y_min, train_dataset.y_max
+                'val', train_dataset.y_min, train_dataset.y_max
             )
             val_dataset = val_cache['dataset']
 
         if test_df is not None:
-            test_base, _, _ = build_base_dataset(self.conf, test_df, target_col, self.device)
+            test_base, _, _ = build_base_dataset(self.conf, test_df, self.device)
             test_dataset = self.make_normalized_subset(
                 test_base, list(range(len(test_base))), train_dataset.y_min, train_dataset.y_max
             )
         else:
             test_cache = self._get_or_build_split_dataset(
-                'test', target_col, train_dataset.y_min, train_dataset.y_max
+                'test', train_dataset.y_min, train_dataset.y_max
             )
             test_dataset = test_cache['dataset']
 

@@ -145,31 +145,6 @@ def plot_iter_losses(iteration_ids, train_losses, val_losses, out_png: Path, top
     plt.close()
 
 
-def read_loocv_results(csv_path: Path):
-    if not csv_path.exists():
-        raise FileNotFoundError(f'LOOCV results not found: {csv_path}')
-    results = []
-    with csv_path.open('r', newline='') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                image_id = str(int(row.get('image_id', '').strip()))
-            except Exception:
-                continue
-            try:
-                gt = float(row.get('ground_truth', 'nan'))
-                pred = float(row.get('prediction', 'nan'))
-            except Exception:
-                continue
-            results.append({
-                'image_id': image_id,
-                'ground_truth': gt,
-                'prediction': pred,
-                'abs_error': abs(gt - pred)
-            })
-    return results
-
-
 def find_image_path(image_id: str):
     df_train, df_valid = build_dataframe()
     full_df = pd.concat([df_train, df_valid], ignore_index=True)
@@ -181,42 +156,6 @@ def find_image_path(image_id: str):
         if sid == image_id:
             return row['texture_path']
     return None
-
-
-def plot_loocv_best_worst(results_csv: Path, out_png: Path, top_k=2):
-    results = read_loocv_results(results_csv)
-    if len(results) == 0:
-        print(f'No LOOCV results found in {results_csv}')
-        return
-
-    sorted_results = sorted(results, key=lambda x: x['abs_error'])
-    best = sorted_results[:top_k]
-    worst = sorted_results[-top_k:][::-1]
-    examples = best + worst
-
-    fig, axes = plt.subplots(2, top_k, figsize=(top_k * 5, 10))
-    axes = axes.reshape(-1)
-
-    for idx, example in enumerate(examples):
-        image_id = example['image_id']
-        image_path = find_image_path(image_id)
-        if image_path is None:
-            axes[idx].text(0.5, 0.5, f'Image {image_id} not found', ha='center', va='center')
-            axes[idx].axis('off')
-            continue
-
-        img = Image.open(image_path).convert('RGB')
-        axes[idx].imshow(img)
-        axes[idx].axis('off')
-        kind = 'BEST' if idx < top_k else 'WORST'
-        axes[idx].set_title(
-            f'{kind} {idx+1 if idx < top_k else idx-top_k+1} | id {image_id}\n'
-            f'gt {example["ground_truth"]:.2f} | pred {example["prediction"]:.2f} | err {example["abs_error"]:.2f}'
-        )
-
-    plt.tight_layout()
-    plt.savefig(str(out_png), dpi=120)
-    plt.close()
 
 
 def plot_iter_predict_times(iteration_ids, predict_times, out_png: Path):
@@ -243,61 +182,9 @@ def plot_iter_predict_times(iteration_ids, predict_times, out_png: Path):
     plt.close()
 
 
-def plot_loocv_logs(loocv_logs_dir: Path, out_dir: Path):
-    """Plot all LOOCV iteration logs"""
-    if not loocv_logs_dir.exists():
-        print(f'LOOCV logs directory not found: {loocv_logs_dir}')
-        return
-    
-    # Read all iter logs and sort numerically by iteration id
-    iter_logs = sorted(
-        loocv_logs_dir.glob('iter_*_log.csv'),
-        key=lambda p: parse_iteration_id(p)
-    )
-    if len(iter_logs) == 0:
-        print(f'No iteration logs found in {loocv_logs_dir}')
-        return
-    
-    iteration_ids = []
-    train_losses_list = []
-    val_losses_list = []
-    predict_times = []
-    
-    for log_file in iter_logs:
-        try:
-            iter_id = parse_iteration_id(log_file)
-            epochs, tl, vl, pt = read_iter_log(log_file)
-            iteration_ids.append(iter_id)
-            train_losses_list.append(tl)
-            val_losses_list.append(vl)
-            predict_times.append(pt if pt is not None else np.nan)
-            if np.isnan(predict_times[-1]):
-                print(f'Warning: missing predict_time in {log_file}')
-        except Exception as e:
-            print(f'Error reading {log_file}: {e}')
-            continue
-
-    missing_predict_count = int(np.isnan(predict_times).sum()) if predict_times else 0
-    if missing_predict_count > 0:
-        print(f'Warning: {missing_predict_count}/{len(predict_times)} LOOCV iterations have missing prediction time values')
-    
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Plot losses
-    plot_iter_losses(iteration_ids, train_losses_list, val_losses_list, out_dir / 'loocv_losses.png')
-    
-    # Plot prediction times
-    plot_iter_predict_times(iteration_ids, predict_times, out_dir / 'loocv_predict_times.png')
-    
-    print(f'LOOCV plots written to {out_dir}')
-
-
 def main():
     parser = argparse.ArgumentParser(description='Plot training_log.csv for a feature_extractor or LOOCV logs')
     parser.add_argument('--config', type=str, default='config.yaml')
-    parser.add_argument('--extractor', type=str, help='Feature extractor name (overrides config)')
-    parser.add_argument('--loocv', action='store_true', help='Plot LOOCV iteration logs instead of training log')
-    parser.add_argument('--loocv-results', action='store_true', help='Plot best/worst predictions from loocv_results.csv')
     parser.add_argument('--results-path', type=str, default='loocv_results.csv', help='Path to loocv_results.csv')
     args = parser.parse_args()
 
@@ -310,36 +197,19 @@ def main():
             extractor = subs[0].name
         else:
             raise SystemExit('feature_extractor not specified and could not be inferred; pass --extractor or set in config.yaml')
+    
+    # Plot training log
+    log_path = Path('checkpoints') / extractor / 'training_log.csv'
+    if not log_path.exists():
+        raise SystemExit(f'Log not found: {log_path}')
 
-    if args.loocv_results:
-        if args.results_path == 'loocv_results.csv':
-            results_path = Path('experiments/runs') / extractor / 'loocv_results.csv'
-        else:
-            results_path = Path(args.results_path)
-        if not results_path.exists():
-            raise SystemExit(f'LOOCV results not found: {results_path}')
-        out_dir = Path('experiments/runs') / extractor / 'loocv_plots'
-        out_dir.mkdir(parents=True, exist_ok=True)
-        plot_loocv_best_worst(results_path, out_dir / 'loocv_best_worst_predictions.png')
-        print(f'Best/worst prediction plot written to: {out_dir / "loocv_best_worst_predictions.png"}')
-    elif args.loocv:
-        # Plot LOOCV logs
-        loocv_logs_dir = Path('experiments/runs') / extractor / 'loocv_logs'
-        out_dir = Path('experiments/runs') / extractor / 'loocv_plots'
-        plot_loocv_logs(loocv_logs_dir, out_dir)
-    else:
-        # Plot training log
-        log_path = Path('checkpoints') / extractor / 'training_log.csv'
-        if not log_path.exists():
-            raise SystemExit(f'Log not found: {log_path}')
+    epochs, train_loss, val_loss, lr = read_training_log(log_path)
 
-        epochs, train_loss, val_loss, lr = read_training_log(log_path)
+    out_dir = log_path.parent
+    plot_losses(epochs, train_loss, val_loss, out_dir / 'training_loss.png')
+    plot_lr(epochs, lr, out_dir / 'training_lr.png')
 
-        out_dir = log_path.parent
-        plot_losses(epochs, train_loss, val_loss, out_dir / 'training_loss.png')
-        plot_lr(epochs, lr, out_dir / 'training_lr.png')
-
-        print(f'Plots written to: {out_dir / "training_loss.png"} and {out_dir / "training_lr.png"}')
+    print(f'Plots written to: {out_dir / "training_loss.png"} and {out_dir / "training_lr.png"}')
 
 
 if __name__ == '__main__':

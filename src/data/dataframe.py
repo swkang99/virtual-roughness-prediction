@@ -32,31 +32,15 @@ def build_dataframe_from_file(conf, texture_path, label_path, header):
     for tex_path in tqdm(texture_files, total=len(texture_files), desc="Build Dataframe from file"):
         sid = tex_path.stem.split('_')[0]
         height_dir, normal_dir = process_texture(tex_path, save_texture_maps=False)
-        
-        # haptic_attribute_list = label_map.get(sid)
-        haptic_attribute = [v[1] for v in label_map.values() if int(v[0]) == int(sid)]
+
+        roughness_values = [v[1] for v in label_map.values() if int(v[0]) == int(sid)]
 
         row = {
             'texture_path': str(tex_path),
+            'normal_path': normal_dir,
+            'height_path': height_dir,
+            'roughness': float(roughness_values[0]),
         }
-
-        if conf['dataset_input'] == 'texture_maps':
-            row.update({ # Change this code to get maps not from files
-                'normal_path': normal_dir,
-                'height_path': height_dir,
-            })
-        elif conf['dataset_input'] != 'texture_image':
-            raise ValueError(f"Unsupported dataset_input: {conf['dataset_input']}")
-
-        if conf['dataset_output'] == 'four_HAs':
-            row['haptic_attribute'] = haptic_attribute
-        elif conf['dataset_output'] == 'roughness':
-            row['roughness'] = float(haptic_attribute[0])
-            # patch_id = int(tex_path.stem.split('_')[2])
-            # print(f'processing texture {sid} - patch {patch_id + 1} complete.')
-        else:
-            raise ValueError(f"Unsupported dataset_output: {conf['dataset_output']}")
-
         rows.append(row)
 
     return pd.DataFrame(rows)

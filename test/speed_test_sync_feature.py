@@ -80,16 +80,11 @@ def run_single_image_pipeline(conf, texture_path: Path):
         n_tensor = torch.tensor(normal_feat, dtype=torch.float32, device=device).unsqueeze(0)
 
     elif dataset_type == "feature":
-        if conf["dataset_input"] == "texture_maps":
-            t_feat = feature_extractor.extract_single_image_features(str(texture_path))
-            n_feat = feature_extractor.extract_single_image_features(str(texture_path))
-            h_feat = feature_extractor.extract_single_image_features(str(texture_path))
-            input_dim = int(np.asarray(t_feat).shape[0] + np.asarray(n_feat).shape[0] + np.asarray(h_feat).shape[0])
-            combined = np.concatenate([t_feat, n_feat, h_feat]).astype(np.float32)
-        else:
-            t_feat = feature_extractor.extract_single_image_features(str(texture_path))
-            input_dim = int(np.asarray(t_feat).shape[0])
-            combined = np.asarray(t_feat, dtype=np.float32)
+        t_feat = feature_extractor.extract_single_image_features(str(texture_path))
+        n_feat = feature_extractor.extract_single_image_features(str(texture_path))
+        h_feat = feature_extractor.extract_single_image_features(str(texture_path))
+        input_dim = int(np.asarray(t_feat).shape[0] + np.asarray(n_feat).shape[0] + np.asarray(h_feat).shape[0])
+        combined = np.concatenate([t_feat, n_feat, h_feat]).astype(np.float32)
         x = torch.tensor(combined, dtype=torch.float32, device=device).unsqueeze(0)
 
     else:

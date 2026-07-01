@@ -18,13 +18,13 @@ def save_random_patches_opencv(
 
     img = cv2.imread(image_path)
     if img is None:
-        raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
+        raise ValueError(f"Cannot load image: {image_path}")
     
     img_h, img_w = img.shape[:2]
     patch_w, patch_h = patch_size
 
     if patch_w > img_w or patch_h > img_h:
-        raise ValueError(f"patch_size {patch_size} 가 이미지 크기 {(img_w, img_h)} 보다 큽니다.")
+        raise ValueError(f"patch_size {patch_size} is larger than image size {(img_w, img_h)}.")
 
     max_x = img_w - patch_w
     max_y = img_h - patch_h

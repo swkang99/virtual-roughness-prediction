@@ -14,32 +14,21 @@ MODEL_DATASET_TYPE = {
     "gated_mlp_v2": "separated",
 }
 
-def build_feature_base_dataset(conf, full_df, target_col, device):
+def build_feature_base_dataset(full_df, device):
     feature_extractor = FeatureExtractor(device)
-    full_features, full_targets = feature_extractor.precompute_features_and_targets(
-        full_df, conf, target_col
-    )
+    full_features, full_targets = feature_extractor.precompute_features_and_targets(full_df)
     input_dim = full_features.shape[1]
     return FeatureDataset(full_features, full_targets), full_targets, input_dim
 
-def build_original_base_dataset(conf, full_df, target_col, device):
-    base_dataset = OriginalDataset(full_df, conf, target_col)
-
-    if conf["dataset_output"] == "four_HAs":
-        full_targets = np.stack(full_df[target_col].to_list()).astype(np.float32)
-    else:
-        full_targets = full_df[target_col].to_numpy(dtype=np.float32).reshape(-1, 1)
-
+def build_original_base_dataset(full_df):
+    base_dataset = OriginalDataset(full_df)
+    full_targets = full_df["roughness"].to_numpy(dtype=np.float32).reshape(-1, 1)
     return base_dataset, full_targets, None
 
-def build_separated_dataset(conf, full_df, target_col, device):
+def build_separated_dataset(full_df, device):
     feature_extractor = FeatureExtractor(device)
 
-    texture_feats, height_feats, normal_feats, all_targets = (
-        feature_extractor.precompute_features_and_targets_separated(
-            full_df, conf, target_col
-        )
-    )
+    texture_feats, height_feats, normal_feats, all_targets = feature_extractor.precompute_features_and_targets_separated(full_df)
 
     texture_feats = np.asarray(texture_feats, dtype=np.float32)
     height_feats  = np.asarray(height_feats, dtype=np.float32)
@@ -58,15 +47,15 @@ def build_separated_dataset(conf, full_df, target_col, device):
         input_dim,
     )
 
-def build_base_dataset(conf, full_df, target_col, device):
+def build_base_dataset(conf, full_df, device):
     dataset_type = MODEL_DATASET_TYPE[conf["model"]]
 
     if dataset_type == "feature":
-        return build_feature_base_dataset(conf, full_df, target_col, device)
+        return build_feature_base_dataset(full_df, device)
     elif dataset_type == "original":
-        return build_original_base_dataset(conf, full_df, target_col, device)
+        return build_original_base_dataset(full_df)
     elif dataset_type == "separated":
-        return build_separated_dataset(conf, full_df, target_col, device)
+        return build_separated_dataset(full_df, device)
     else:
         raise ValueError(f"Unsupported dataset type: {dataset_type}")
     

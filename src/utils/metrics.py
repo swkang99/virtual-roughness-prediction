@@ -8,11 +8,7 @@ def metrics(conf, mae_per_output, rmse_per_output, predictions, ground_truths, t
     results_dir = Path(f'experiments/runs/{train_tag}')
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Name mapping for each output dimension
-    if conf['dataset_output'] == 'four_HAs':
-        per_output_names = ['rough-smooth', 'flat-bumpy', 'sticky-slippery', 'hard-soft']
-    elif conf['dataset_output'] == 'roughness':
-        per_output_names = ['roughness']
+    per_output_names = ['roughness']
 
     per_output_dict = {}
     for name, m, r in zip(per_output_names, mae_per_output, rmse_per_output):

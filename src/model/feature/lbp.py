@@ -92,9 +92,3 @@ def extract_lbp_feature(image, grid=(7, 7)):
 
     feature_vector = np.concatenate(features, axis=0)
     return feature_vector, lbp_maps
-
-# img = cv2.imread(r"C:\Users\kseon\virtual_tactile_property\data\original\texture_image\1.jpg", cv2.IMREAD_GRAYSCALE)
-# feature_vector, lbp_maps = extract_lbp_feature(img, grid=(7, 7))
-
-# print("Feature vector shape:", feature_vector.shape)  # (2891,) if 7x7 cells
-# print(feature_vector)

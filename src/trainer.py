@@ -15,11 +15,11 @@ from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
 from src.model.prediction.proposed.gated_mlp.gated_mlp_v1 import GatedFusionRegressor
 from src.model.prediction.proposed.gated_mlp.gated_mlp_v2 import GatedFusionRegressorV2
-from src.utils.metrics import metrics
 
 
 def is_gated_mlp(model):
-    return isinstance(model, GatedFusionRegressor) or isinstance(model, GatedFusionRegressorV2)
+    module_name = model.__class__.__module__
+    return module_name.startswith('src.model.prediction.proposed.gated_mlp')
 
 
 def is_transformer(model):
@@ -69,7 +69,23 @@ def forward_by_model(model, inputs):
     return model(inputs)
 
 
-def train_one_fold(model, dataset, device, epochs, batch_size, lr, weight_decay):
+def train_one_fold(
+    model,
+    dataset,
+    device,
+    epochs,
+    batch_size,
+    lr,
+    weight_decay,
+    val_dataset=None,
+    y_min=None,
+    y_max=None,
+    checkpoint_callback=None,
+):
+    """Train a single fold with optional per-epoch validation and checkpointing.
+
+    checkpoint_callback: callable(model, epoch, metric) -> None
+    """
     if is_torch_model(model):
         train_loader = DataLoader(
             dataset,
@@ -88,7 +104,9 @@ def train_one_fold(model, dataset, device, epochs, batch_size, lr, weight_decay)
         model.to(device)
         model.train()
 
-        for _ in tqdm(range(epochs), desc="Train One Fold"):
+        best_metric = None
+
+        for epoch in tqdm(range(epochs), desc="Train One Fold"):
             for batch in train_loader:
                 inputs, y = prepare_batch_by_model(batch, model, device)
 
@@ -101,6 +119,26 @@ def train_one_fold(model, dataset, device, epochs, batch_size, lr, weight_decay)
                 loss = criterion(pred, y)
                 loss.backward()
                 optimizer.step()
+
+            # Per-epoch validation & checkpointing
+            if val_dataset is not None and checkpoint_callback is not None:
+                try:
+                    preds, gts = evaluate_one_fold(
+                        model=model,
+                        dataset=val_dataset,
+                        device=device,
+                        y_min=y_min,
+                        y_max=y_max,
+                        batch_size=batch_size,
+                    )
+                    # Compute RMSE as scalar
+                    epoch_rmse = float(np.sqrt(np.mean((gts - preds) ** 2)))
+                    if best_metric is None or epoch_rmse < best_metric:
+                        best_metric = epoch_rmse
+                        checkpoint_callback(model, int(epoch), epoch_rmse)
+                        print(f"New best at epoch {epoch}: RMSE={epoch_rmse:.6f}")
+                except Exception as e:
+                    print(f"Warning: validation failed at epoch {epoch}: {e}")
 
         return model
 
@@ -161,7 +199,6 @@ class Trainer:
     Unified trainer for managing model training and evaluation workflows.
     
     Supports:
-    - LOOCV (Leave-One-Out Cross-Validation)
     - Train/Val/Test split-based training
     - Model checkpointing
     - Metric computation
@@ -361,7 +398,7 @@ class Trainer:
                 y_max=y_max,
             )
             val_results = {'preds': preds, 'gts': gts}
-        
+
         return model, val_results
     
     def evaluate(self, model, dataset):

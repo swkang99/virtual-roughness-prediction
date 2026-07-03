@@ -57,10 +57,11 @@ def extract_lbp_feature(image, grid=(7, 7)):
     if image.ndim == 3:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # image = cv2.resize(image, (224, 224))
+    # Use the input image size rather than assuming 224x224.
     rows, cols = grid
-    cell_h = 224 // rows
-    cell_w = 224 // cols
+    h, w = image.shape[:2]
+    cell_h = h // rows
+    cell_w = w // cols
 
     features = []
     lbp_maps = []
@@ -68,9 +69,21 @@ def extract_lbp_feature(image, grid=(7, 7)):
     for r in range(rows):
         row_maps = []
         for c in range(cols):
-            y0, y1 = r * cell_h, (r + 1) * cell_h
-            x0, x1 = c * cell_w, (c + 1) * cell_w
+            # For the last row/col include any remainder pixels
+            y0 = r * cell_h
+            y1 = (r + 1) * cell_h if r < rows - 1 else h
+            x0 = c * cell_w
+            x1 = (c + 1) * cell_w if c < cols - 1 else w
             cell = image[y0:y1, x0:x1]
+
+            # Ensure each cell is at least 3x3 for 8-neighbor LBP computation.
+            ch, cw = cell.shape[:2]
+            if ch < 3 or cw < 3:
+                top = max(0, (3 - ch) // 2)
+                bottom = max(0, 3 - ch - top)
+                left = max(0, (3 - cw) // 2)
+                right = max(0, 3 - cw - left)
+                cell = cv2.copyMakeBorder(cell, top, bottom, left, right, cv2.BORDER_REPLICATE)
 
             hist, lbp_raw = lbp_hist_59(cell)
             features.append(hist)
@@ -79,9 +92,3 @@ def extract_lbp_feature(image, grid=(7, 7)):
 
     feature_vector = np.concatenate(features, axis=0)
     return feature_vector, lbp_maps
-
-# img = cv2.imread(r"C:\Users\kseon\virtual_tactile_property\data\original\texture_image\1.jpg", cv2.IMREAD_GRAYSCALE)
-# feature_vector, lbp_maps = extract_lbp_feature(img, grid=(7, 7))
-
-# print("Feature vector shape:", feature_vector.shape)  # (2891,) if 7x7 cells
-# print(feature_vector)

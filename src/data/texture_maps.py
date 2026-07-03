@@ -1,25 +1,26 @@
+import yaml
+
 from pathlib import Path
 from PIL import Image
 
 import cv2
 import numpy as np
 
+with open('config.yaml', 'r', encoding='utf-8') as f:
+    conf = yaml.safe_load(f)
 
 def load_grayscale_image(path):
     img = Image.open(path).convert('L')
     arr = np.array(img, dtype=np.float32) / 255.0
     return arr
 
-
 def save_grayscale_image(arr, path):
     arr = np.clip(arr, 0.0, 1.0)
     Image.fromarray((arr * 255).astype(np.uint8), mode='L').save(path)
 
-
 def save_rgb_image(arr, path):
     arr = np.clip(arr, 0, 255).astype(np.uint8)
     Image.fromarray(arr, mode='RGB').save(path)
-
 
 def extract_height_map(gray_img, blur_ksize=5, invert=False, normalize_output=True):
     height = gray_img.copy()
@@ -38,7 +39,6 @@ def extract_height_map(gray_img, blur_ksize=5, invert=False, normalize_output=Tr
             height = (height - hmin) / (hmax - hmin)
 
     return height
-
 
 def extract_normal_map_rgb(height_map, strength=4.0, invert_y=False):
     h = height_map.astype(np.float32)
@@ -63,55 +63,32 @@ def extract_normal_map_rgb(height_map, strength=4.0, invert_y=False):
 
     return normal_rgb
 
-
-def process_texture(
-    texture_path,
-    output_dir="output_maps",
-    save_texture_maps=False,
-    blur_ksize=5,
-    strength=4.0,
-    invert=False,
-    invert_y=False,
-):
+def process_texture(texture_path, output_dir="output_maps", save_texture_maps=False, blur_ksize=5, strength=4.0, invert=False, invert_y=False):
     if not isinstance(texture_path, Path):
         texture_path = Path(texture_path)
-
     output_dir = texture_path.parent.parent / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     height_path = output_dir / f"{texture_path.stem}_height_map_gray.png"
     normal_path = output_dir / f"{texture_path.stem}_normal_map_rgb.png"
 
-    if not save_texture_maps:
-        return str(height_path), str(normal_path)
-
-    height_exists = height_path.exists()
-    normal_exists = normal_path.exists()
-
-    if height_exists and normal_exists:
-        return str(height_path), str(normal_path)
-
-    if height_exists:
-        height_map = load_grayscale_image(height_path)
-    else:
+    if save_texture_maps:
         gray_img = load_grayscale_image(texture_path)
 
         height_map = extract_height_map(
             gray_img,
             blur_ksize=blur_ksize,
             invert=invert,
-            normalize_output=True,
+            normalize_output=True
         )
 
-        save_grayscale_image(height_map, height_path)
-
-    if not normal_exists:
         normal_map_rgb = extract_normal_map_rgb(
             height_map,
             strength=strength,
-            invert_y=invert_y,
+            invert_y=invert_y
         )
 
+        save_grayscale_image(height_map, height_path)
         save_rgb_image(normal_map_rgb, normal_path)
 
     return str(height_path), str(normal_path)
@@ -123,11 +100,10 @@ if __name__ == "__main__":
     height_path, normal_path = process_texture(
         texture_path,
         output_dir="output_maps",
-        save_texture_maps=True,
         blur_ksize=5,
         strength=4.0,
         invert=False,
-        invert_y=False,
+        invert_y=False
     )
 
     print("Saved height map:", height_path)

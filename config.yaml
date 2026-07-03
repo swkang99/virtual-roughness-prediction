@@ -2,42 +2,23 @@
 # Training Configuration
 # =============================================================================
 
-# Training settings
-feature_extractor: resnet50
-batch_size: 56
+# Default Training settings
+batch_size: 128
 epochs: 300
 num_workers: 0
 learning_rate: 1e-3
 weight_decay: 1e-4
-train_tag: 'transformer_model_H'
- 
+train_tag: 'default'
+
 # =============================================================================
 # Data Configuration
 # =============================================================================
 
 # Data paths
-data_base_path: 'src/data/original'
-data_image_path: 'texture_image'
-data_label_path: 'ParticipantData.csv'
-
+data_train_path: 'data/split/train'
+data_val_path: 'data/split/val'
+data_test_path: 'data/split/test'
 data_patch_path: 'patches'
-data_train_path: 'src/data/split/train'
-data_val_path: 'src/data/split/val'
-data_test_path: 'src/data/split/test'
-
-# Input type (choose one)
-#   texture_image: use texture image only
-#   texture_maps: use height map and normal map with texture image
-dataset_input: texture_maps
-
-# Output type (choose one)
-#   roughness: predict roughness value only
-#   four_HAs: predict four haptic attributes:
-#     - rough-smooth
-#     - flat-bumpy
-#     - sticky-slippery
-#     - hard-soft
-dataset_output: roughness
 
 # =============================================================================
 # Model Configuration
@@ -46,10 +27,10 @@ dataset_output: roughness
 # Model options:
 #   1. lr             : Linear Regressor
 #   2. svr            : Support Vector Regressor
-#   3. ann            : Artificial Neural Network
+#   3. ann            : Artificial Neural Network (Simple DNN)
 #   4. cnn_1d_scirep  : 1D-CNN (Taye et al.)
 #   5. cnn_1d_4ha     : 1D-CNN (Hassan et al.)
-#   6. transformer    : Proposed Transformer Regressor 
-#   7. cnn_1d_generic : Proposed 1D-CNN for comparing with Gated Fusion MLP
+#   6. cnn_1d_generic : Simple 1D-CNN for comparing with proposed model
+#   7. transformer    : Proposed Transformer Regressor 
 #   8. gated_mlp      : Proposed Gated Fusion MLP
-model: transformer
+model: gated_mlp_v2

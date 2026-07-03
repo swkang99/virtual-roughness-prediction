@@ -12,24 +12,8 @@ def build_conf(base_conf, model_name):
     return conf
 
 
-def main():
-    with open("config.yaml", "r", encoding="utf-8") as f:
-        base_conf = yaml.safe_load(f)
-
-    model_list = [
-        # "lr",
-        # "svr",
-        # "ann",
-        # "cnn_1d_scirep",
-        # "cnn_1d_4ha",
-        "transformer",
-        # "cnn_1d_generic",
-        # "gated_mlp",
-        # "gated_mlp_v2",
-    ]
-
-    trainer = Trainer(conf=copy.deepcopy(base_conf), model_builder=create_model)
-
+def run_models(trainer, base_conf, model_list):
+    results = {}
     for model_name in model_list:
         conf = build_conf(base_conf, model_name)
 
@@ -43,7 +27,31 @@ def main():
         trainer.set_seed(trainer.seed)
 
         result = trainer.fit_splits()
+        results[model_name] = result
         print(f"[{model_name}] metrics: {result['metrics']}")
+
+    return results
+
+
+def main():
+    with open("config.yaml", "r", encoding="utf-8") as f:
+        base_conf = yaml.safe_load(f)
+
+    model_list = [
+        "lr",
+        "svr",
+        "ann",
+        "cnn_1d_scirep",
+        "cnn_1d_4ha",
+        "transformer",
+        "cnn_1d_generic",
+        "gated_mlp",
+        "gated_mlp_v2",
+    ]
+
+    trainer = Trainer(conf=copy.deepcopy(base_conf), model_builder=create_model)
+    # Run experiments for the provided model list
+    run_models(trainer, base_conf, model_list)
 
 
 if __name__ == "__main__":

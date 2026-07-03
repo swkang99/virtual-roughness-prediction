@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
 import json
+from datetime import datetime
 from sklearn.metrics import mean_absolute_error
 from tqdm import tqdm
 
@@ -392,9 +393,23 @@ class Trainer:
                 with open(ckpt_path, 'wb') as f:
                     pickle.dump(model_obj, f)
 
-            # write metadata
+            # write metadata with extra info
+            meta = {
+                'epoch': int(epoch),
+                'rmse': float(metric),
+                'train_tag': train_tag,
+                'model_class': model_obj.__class__.__name__,
+                'input_dim': None if not hasattr(self, 'input_dim') else (self.input_dim if isinstance(self.input_dim, (int, float, str, type(None))) else str(self.input_dim)),
+                'hyperparameters': {
+                    'epochs': int(self.epochs),
+                    'batch_size': int(self.batch_size),
+                    'lr': float(self.lr),
+                    'weight_decay': float(self.weight_decay),
+                    'seed': int(self.seed),
+                }
+            }
             with open(meta_path, 'w') as mf:
-                json.dump({'epoch': epoch, 'rmse': float(metric)}, mf)
+                json.dump(meta, mf, indent=2)
 
             if self.verbose:
                 print(f"Saved best checkpoint to {ckpt_path} (epoch={epoch}, rmse={metric:.6f})")

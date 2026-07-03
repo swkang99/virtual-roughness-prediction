@@ -203,10 +203,7 @@ $RECYCLE.BIN/
 
 .vscode/
 
-# Data directory
-/src/data/split/
-/checkpoints/
+# Data & Result files
+/data
 /experiments/
-/src/feature_cache/
-/src/output/
-
+/output

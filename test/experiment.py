@@ -22,8 +22,8 @@ def main():
         # "ann",
         # "cnn_1d_scirep",
         # "cnn_1d_4ha",
-        # "transformer",
-        "cnn_1d_generic",
+        "transformer",
+        # "cnn_1d_generic",
         # "gated_mlp",
         # "gated_mlp_v2",
     ]

@@ -13,13 +13,18 @@ from tqdm import tqdm
 from src.data.dataframe import build_dataframe_from_file
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
-from src.model.prediction.proposed.gated_mlp import GatedFusionRegressor
-from src.model.prediction.proposed.gated_mlp_v2 import GatedFusionRegressorV2
+from src.model.prediction.proposed.gated_mlp.gated_mlp_v1 import GatedFusionRegressor
+from src.model.prediction.proposed.gated_mlp.gated_mlp_v2 import GatedFusionRegressorV2
 from src.utils.metrics import metrics
 
 
 def is_gated_mlp(model):
     return isinstance(model, GatedFusionRegressor) or isinstance(model, GatedFusionRegressorV2)
+
+
+def is_transformer(model):
+    module_name = model.__class__.__module__
+    return module_name.startswith('src.model.prediction.proposed.transformer')
 
 
 def is_torch_model(model):
@@ -34,7 +39,7 @@ def prepare_batch_by_model(batch, model, device):
     FeatureDataset 기준:
         batch = (x, y)
     """
-    if is_gated_mlp(model):
+    if is_gated_mlp(model) or is_transformer(model):
         texture, height, normal, y = batch
         texture = texture.to(device).float()
         height = height.to(device).float()
@@ -58,7 +63,7 @@ def prepare_batch_by_model(batch, model, device):
 
 
 def forward_by_model(model, inputs):
-    if is_gated_mlp(model):
+    if is_gated_mlp(model) or is_transformer(model):
         texture, height, normal = inputs
         return model(texture, height, normal)
     return model(inputs)
@@ -226,10 +231,8 @@ class Trainer:
                 - full_targets: NumPy array of shape (N, D) or (N,)
                 - input_dim: Input dimension or None
         """
-        target_col = "roughness"
-        
         base_dataset, full_targets, input_dim = build_base_dataset(
-            self.conf, full_df, target_col, self.device
+            self.conf, full_df, self.device
         )
         return base_dataset, full_targets, input_dim
     

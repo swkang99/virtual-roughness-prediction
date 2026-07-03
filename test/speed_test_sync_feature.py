@@ -8,13 +8,7 @@ from src.data.factory import MODEL_DATASET_TYPE
 from src.model.factory import create_model
 from src.model.feature.feature_extractor import FeatureExtractor
 from src.data.texture_maps import load_grayscale_image, extract_height_map, extract_normal_map_rgb
-from src.model.feature.geometry_statistic import (
-    extract_height_features,
-    extract_normal_features,
-    dict_to_ordered_vector,
-    HEIGHT_KEYS,
-    NORMAL_KEYS,
-)
+
 from PIL import Image
 from torchvision import transforms
 
@@ -63,23 +57,8 @@ def run_single_image_pipeline(conf, texture_path: Path):
 
     input_dim = None
     # Precompute feature tensors/vectors for forward (reuse later)
-    if dataset_type == "separated":
-        texture_feat = feature_extractor.extract_texture_descriptor(str(texture_path))
-        height_feat = dict_to_ordered_vector(extract_height_features(height_map), HEIGHT_KEYS)
-        normal_feat = dict_to_ordered_vector(
-            extract_normal_features(normal_rgb.astype(np.float32) / 255.0),
-            NORMAL_KEYS,
-        )
-        input_dim = {
-            "texture_dim": int(np.asarray(texture_feat).shape[0]),
-            "height_dim": int(np.asarray(height_feat).shape[0]),
-            "normal_dim": int(np.asarray(normal_feat).shape[0]),
-        }
-        t_tensor = torch.tensor(texture_feat, dtype=torch.float32, device=device).unsqueeze(0)
-        h_tensor = torch.tensor(height_feat, dtype=torch.float32, device=device).unsqueeze(0)
-        n_tensor = torch.tensor(normal_feat, dtype=torch.float32, device=device).unsqueeze(0)
 
-    elif dataset_type == "feature":
+    if dataset_type == "feature":
         t_feat = feature_extractor.extract_single_image_features(str(texture_path))
         n_feat = feature_extractor.extract_single_image_features(str(texture_path))
         h_feat = feature_extractor.extract_single_image_features(str(texture_path))
@@ -101,9 +80,7 @@ def run_single_image_pipeline(conf, texture_path: Path):
     _sync_if_cuda(device)
     fw_start = time.perf_counter()
     with torch.inference_mode():
-        if dataset_type == "separated":
-            pred = model(t_tensor, h_tensor, n_tensor)
-        elif dataset_type == "feature":
+        if dataset_type == "feature":
             pred = model(x)
         else:
             # original: prepare tensors and forward

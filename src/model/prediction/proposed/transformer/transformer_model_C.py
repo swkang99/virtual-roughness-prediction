@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class TransformerRegressor(nn.Module):
+class TransformerRegressor(nn.Module):  # Total trainable parameters = 131,233
     """
     Normal + normal gradient local-window Transformer-based roughness regressor.
 
@@ -24,31 +24,30 @@ class TransformerRegressor(nn.Module):
         roughness: [B, 1]
 
     Main structure:
-        normal feature [B, 9, 448, 448]
-        -> 32x32 window partition
-        -> each window: 2x2 subpatch tokens
+        normal feature [B, 9, 256, 256]
+        -> 16x16 window partition
+        -> each window: 1x1 pixel tokens
         -> 256 tokens per window
         -> local self-attention
-        -> window pooling
-        -> [B, D, 14, 14]
+        -> window pooling with mean + max + std
+        -> [B, D, 16, 16]
         -> CNN head
-        -> global pooling
+        -> global pooling with avg + max + std
         -> MLP
         -> [B, 1]
     """
 
     def __init__(
         self,
-        image_size=448,  # kept for compatibility with existing config/model factory
-        embed_dim=64, #128,
+        image_size=256,
+        embed_dim=64,
         num_heads=4,
-        depth=1, #4,
-        mlp_ratio=2.0, #4.0,
+        depth=1,
+        mlp_ratio=2.0,
         dropout=0.1,
         bounded_output=False,
         output_scale=100.0,
-        window_size=16, #32,
-        subpatch_size=2
+        window_size=16,
     ):
         super().__init__()
 
@@ -57,7 +56,6 @@ class TransformerRegressor(nn.Module):
         self.output_scale = output_scale
 
         self.window_size = window_size
-        self.subpatch_size = subpatch_size
 
         # normal, normal_dx, normal_dy
         # each has 3 channels -> total 9 channels
@@ -69,24 +67,24 @@ class TransformerRegressor(nn.Module):
                 f"but got image_size={image_size}, window_size={window_size}"
             )
 
-        if window_size % subpatch_size != 0:
-            raise ValueError(
-                f"window_size must be divisible by subpatch_size, "
-                f"but got window_size={window_size}, subpatch_size={subpatch_size}"
-            )
-
         if embed_dim % num_heads != 0:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads, "
                 f"but got embed_dim={embed_dim}, num_heads={num_heads}"
             )
 
-        self.tokens_per_side = window_size // subpatch_size
-        self.tokens_per_window = self.tokens_per_side ** 2
+        # Since subpatch_size is removed, each pixel inside a window is one token.
+        # For window_size = 16:
+        # tokens_per_side = 16
+        # tokens_per_window = 16 * 16 = 256
+        self.tokens_per_side = window_size
+        self.tokens_per_window = window_size ** 2
 
-        # For subpatch_size = 2:
-        # token_input_dim = 9 * 2 * 2 = 36
-        token_input_dim = self.input_channels * subpatch_size * subpatch_size
+        # Each pixel token has 9 channels:
+        # [normal_x, normal_y, normal_z,
+        #  normal_dx_x, normal_dx_y, normal_dx_z,
+        #  normal_dy_x, normal_dy_y, normal_dy_z]
+        token_input_dim = self.input_channels
 
         self.token_embed = nn.Sequential(
             nn.Linear(token_input_dim, embed_dim),
@@ -115,6 +113,11 @@ class TransformerRegressor(nn.Module):
 
         self.norm = nn.LayerNorm(embed_dim)
 
+        # Window token pooling:
+        # mean + max + std
+        # [B*num_windows, 3D] -> [B*num_windows, D]
+        self.window_pool_proj = nn.Linear(embed_dim * 3, embed_dim)
+
         self.cnn_head = nn.Sequential(
             nn.Conv2d(embed_dim, embed_dim, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(embed_dim),
@@ -125,11 +128,12 @@ class TransformerRegressor(nn.Module):
             nn.GELU(),
         )
 
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-
+        # Global pooling uses avg + max + std.
+        # CNN head output channel is embed_dim // 2.
+        # Therefore regressor input dim is 3 * (embed_dim // 2).
         self.regressor = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(embed_dim // 2, 128),
+            nn.Linear((embed_dim // 2) * 3, 128),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1),
@@ -262,28 +266,21 @@ class TransformerRegressor(nn.Module):
         grid_w = w // self.window_size
 
         ws = self.window_size
-        sp = self.subpatch_size
-        tps = self.tokens_per_side
 
         # [B, 9, H, W]
-        # -> [B, 9, grid_h, 32, grid_w, 32]
+        # For 256x256 and window_size=16:
+        # -> [B, 9, 16, 16, 16, 16]
         x = x.reshape(b, c, grid_h, ws, grid_w, ws)
 
-        # -> [B, grid_h, grid_w, 9, 32, 32]
-        x = x.permute(0, 2, 4, 1, 3, 5).contiguous()
+        # -> [B, grid_h, grid_w, 16, 16, 9]
+        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
 
-        # -> [B, grid_h, grid_w, 9, 16, 2, 16, 2]
-        x = x.reshape(b, grid_h, grid_w, c, tps, sp, tps, sp)
-
-        # -> [B, grid_h, grid_w, 16, 16, 9, 2, 2]
-        x = x.permute(0, 1, 2, 4, 6, 3, 5, 7).contiguous()
-
-        # -> [B, grid_h * grid_w, 256, 36]
+        # -> [B, grid_h * grid_w, 256, 9]
         x = x.reshape(
             b,
             grid_h * grid_w,
             self.tokens_per_window,
-            c * sp * sp,
+            c,
         )
 
         # -> [B, grid_h * grid_w, 256, D]
@@ -308,9 +305,18 @@ class TransformerRegressor(nn.Module):
         tokens = self.transformer(tokens)
         tokens = self.norm(tokens)
 
-        # [B * num_windows, 256, D]
+        # Window pooling:
+        # [B * num_windows, tokens_per_window, D]
+        # -> mean/max/std each [B * num_windows, D]
+        mean_feat = tokens.mean(dim=1)
+        max_feat = tokens.max(dim=1).values
+        std_feat = tokens.std(dim=1, unbiased=False)
+
+        # -> [B * num_windows, 3D]
+        window_features = torch.cat([mean_feat, max_feat, std_feat], dim=1)
+
         # -> [B * num_windows, D]
-        window_features = tokens.mean(dim=1)
+        window_features = self.window_pool_proj(window_features)
 
         # -> [B, num_windows, D]
         window_features = window_features.reshape(
@@ -329,21 +335,39 @@ class TransformerRegressor(nn.Module):
 
         return feature_map
 
+    def _global_pool_features(self, x):
+        """
+        Global pooling with avg + max + std.
+
+        x:
+            [B, C, H, W]
+
+        Output:
+            [B, 3C]
+        """
+        avg_feat = x.mean(dim=(2, 3))
+        max_feat = x.amax(dim=(2, 3))
+        std_feat = x.std(dim=(2, 3), unbiased=False)
+
+        x = torch.cat([avg_feat, max_feat, std_feat], dim=1)
+
+        return x
+
     def forward(self, height_img1, height_img2, height_img3):
         # height_img1 and height_img2 are intentionally ignored.
         # Only height_img3 is used as the normal image.
         x = self._build_normal_feature_input(height_img3)
 
-        # [B, 9, 448, 448] -> [B, D, 14, 14]
+        # [B, 9, 256, 256] -> [B, D, 16, 16]
         x = self._encode_local_windows(x)
 
-        # [B, D, 14, 14] -> [B, D/2, 14, 14]
+        # [B, D, 16, 16] -> [B, D/2, 16, 16]
         x = self.cnn_head(x)
 
-        # [B, D/2, 14, 14] -> [B, D/2, 1, 1]
-        x = self.global_pool(x)
+        # [B, D/2, 16, 16] -> [B, 3 * D/2]
+        x = self._global_pool_features(x)
 
-        # [B, D/2, 1, 1] -> [B, 1]
+        # [B, 3 * D/2] -> [B, 1]
         out = self.regressor(x)
 
         if self.bounded_output:

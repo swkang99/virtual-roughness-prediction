@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 
 
-class TransformerRegressor(nn.Module):
+class TransformerRegressor(nn.Module):  # Total trainable parameters = 118,689
     """
-    Texture gray + height gray + normal local-window Transformer-based roughness regressor.
+    Texture gray + height gray + normal local-window Transformer-based roughness regressor
+    with learnable local roughness token.
 
     Input:
         height_img1, height_img2, height_img3:
@@ -25,13 +26,15 @@ class TransformerRegressor(nn.Module):
         roughness: [B, 1]
 
     Main structure:
-        feature [B, 5, 448, 448]
+        feature [B, 5, 256, 256]
         -> 16x16 window partition
         -> each window: 1x1 pixel tokens
-        -> 256 tokens per window
+        -> 256 pixel tokens per window
+        -> prepend learnable local roughness token
+        -> 257 tokens per window
         -> local self-attention
-        -> window pooling with mean + max + std
-        -> [B, D, 28, 28]
+        -> take local roughness token output as window descriptor
+        -> [B, D, 16, 16]
         -> CNN head
         -> global pooling with avg + max + std
         -> MLP
@@ -40,7 +43,7 @@ class TransformerRegressor(nn.Module):
 
     def __init__(
         self,
-        image_size=448,  # kept for compatibility with existing config/model factory
+        image_size=256,
         embed_dim=64,
         num_heads=4,
         depth=1,
@@ -49,16 +52,13 @@ class TransformerRegressor(nn.Module):
         bounded_output=False,
         output_scale=100.0,
         window_size=16,
-        subpatch_size=1,
     ):
         super().__init__()
 
         self.embed_dim = embed_dim
         self.bounded_output = bounded_output
         self.output_scale = output_scale
-
         self.window_size = window_size
-        self.subpatch_size = subpatch_size
 
         # texture_gray, height_gray, normal_xyz
         # 1 + 1 + 3 = 5 channels
@@ -70,33 +70,35 @@ class TransformerRegressor(nn.Module):
                 f"but got image_size={image_size}, window_size={window_size}"
             )
 
-        if window_size % subpatch_size != 0:
-            raise ValueError(
-                f"window_size must be divisible by subpatch_size, "
-                f"but got window_size={window_size}, subpatch_size={subpatch_size}"
-            )
-
         if embed_dim % num_heads != 0:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads, "
                 f"but got embed_dim={embed_dim}, num_heads={num_heads}"
             )
 
-        self.tokens_per_side = window_size // subpatch_size
-        self.tokens_per_window = self.tokens_per_side ** 2
+        # Since each pixel inside a window is one token:
+        # For window_size = 16:
+        # tokens_per_window = 16 * 16 = 256 pixel tokens
+        self.tokens_per_window = window_size ** 2
 
-        # For subpatch_size = 1:
-        # token_input_dim = 5 * 1 * 1 = 5
-        token_input_dim = self.input_channels * subpatch_size * subpatch_size
-
+        # Each pixel token has 5 channels:
+        # [texture_gray, height_gray, normal_x, normal_y, normal_z]
         self.token_embed = nn.Sequential(
-            nn.Linear(token_input_dim, embed_dim),
+            nn.Linear(self.input_channels, embed_dim),
             nn.LayerNorm(embed_dim),
             nn.GELU(),
         )
 
+        # Positional embedding for 256 pixel tokens inside each local window.
         self.local_pos_embed = nn.Parameter(
             torch.zeros(1, self.tokens_per_window, embed_dim)
+        )
+
+        # Learnable local roughness token.
+        # This token is prepended to the 256 pixel tokens in every local window.
+        # After local Transformer, this token output becomes the window descriptor.
+        self.local_roughness_token = nn.Parameter(
+            torch.zeros(1, 1, embed_dim)
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -115,11 +117,6 @@ class TransformerRegressor(nn.Module):
         )
 
         self.norm = nn.LayerNorm(embed_dim)
-
-        # Window token pooling:
-        # mean + max + std
-        # [B*num_windows, 3D] -> [B*num_windows, D]
-        self.window_pool_proj = nn.Linear(embed_dim * 3, embed_dim)
 
         self.cnn_head = nn.Sequential(
             nn.Conv2d(embed_dim, embed_dim, kernel_size=3, stride=1, padding=1),
@@ -145,6 +142,7 @@ class TransformerRegressor(nn.Module):
 
     def _init_weights(self):
         nn.init.trunc_normal_(self.local_pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.local_roughness_token, std=0.02)
 
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -185,14 +183,10 @@ class TransformerRegressor(nn.Module):
 
     def _to_normal_input(self, x):
         """
-        Convert normal input to unit normal vector [B, 3, H, W].
+        Convert normal input to [B, 3, H, W].
 
         Assumption:
-            input normal map is in [0, 1].
-
-        Process:
-            [0, 1] -> [-1, 1]
-            then unit-vector normalization.
+            input normal map is already in [0, 1].
 
         Important:
             If the input has 3 channels, they are preserved.
@@ -256,31 +250,22 @@ class TransformerRegressor(nn.Module):
 
         grid_h = h // self.window_size
         grid_w = w // self.window_size
-
         ws = self.window_size
-        sp = self.subpatch_size
-        tps = self.tokens_per_side
 
         # [B, 5, H, W]
-        # -> [B, 5, grid_h, 16, grid_w, 16]
+        # For 256x256 and window_size=16:
+        # -> [B, 5, 16, 16, 16, 16]
         x = x.reshape(b, c, grid_h, ws, grid_w, ws)
 
-        # -> [B, grid_h, grid_w, 5, 16, 16]
-        x = x.permute(0, 2, 4, 1, 3, 5).contiguous()
-
-        # For subpatch_size = 1:
-        # -> [B, grid_h, grid_w, 5, 16, 1, 16, 1]
-        x = x.reshape(b, grid_h, grid_w, c, tps, sp, tps, sp)
-
-        # -> [B, grid_h, grid_w, 16, 16, 5, 1, 1]
-        x = x.permute(0, 1, 2, 4, 6, 3, 5, 7).contiguous()
+        # -> [B, grid_h, grid_w, 16, 16, 5]
+        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
 
         # -> [B, grid_h * grid_w, 256, 5]
         x = x.reshape(
             b,
             grid_h * grid_w,
             self.tokens_per_window,
-            c * sp * sp,
+            c,
         )
 
         # -> [B, grid_h * grid_w, 256, D]
@@ -300,23 +285,30 @@ class TransformerRegressor(nn.Module):
 
         tokens, grid_h, grid_w = self._partition_windows_to_tokens(x)
 
+        # Add positional embedding only to pixel tokens.
+        # tokens: [B * num_windows, 256, D]
         tokens = tokens + self.local_pos_embed
 
+        # Prepend learnable local roughness token to every local window.
+        # roughness_tokens: [B * num_windows, 1, D]
+        roughness_tokens = self.local_roughness_token.expand(
+            tokens.size(0),
+            -1,
+            -1,
+        )
+
+        # [B * num_windows, 257, D]
+        tokens = torch.cat([roughness_tokens, tokens], dim=1)
+
+        # Local self-attention:
+        # roughness token attends to 256 pixel tokens,
+        # and its output becomes a learned window descriptor.
         tokens = self.transformer(tokens)
         tokens = self.norm(tokens)
 
-        # Window pooling:
-        # [B * num_windows, tokens_per_window, D]
-        # -> mean/max/std each [B * num_windows, D]
-        mean_feat = tokens.mean(dim=1)
-        max_feat = tokens.max(dim=1).values
-        std_feat = tokens.std(dim=1, unbiased=False)
-
-        # -> [B * num_windows, 3D]
-        window_features = torch.cat([mean_feat, max_feat, std_feat], dim=1)
-
-        # -> [B * num_windows, D]
-        window_features = self.window_pool_proj(window_features)
+        # Take only local roughness token output.
+        # [B * num_windows, D]
+        window_features = tokens[:, 0]
 
         # -> [B, num_windows, D]
         window_features = window_features.reshape(
@@ -359,13 +351,15 @@ class TransformerRegressor(nn.Module):
         # height_img3: normal map
         x = self._build_5ch_feature_input(height_img1, height_img2, height_img3)
 
-        # [B, 5, 448, 448] -> [B, D, 28, 28]
+        # [B, 5, 256, 256]
+        # -> local roughness-token-based window features
+        # -> [B, D, 16, 16]
         x = self._encode_local_windows(x)
 
-        # [B, D, 28, 28] -> [B, D/2, 28, 28]
+        # [B, D, 16, 16] -> [B, D/2, 16, 16]
         x = self.cnn_head(x)
 
-        # [B, D/2, 28, 28] -> [B, 3 * D/2]
+        # [B, D/2, 16, 16] -> [B, 3 * D/2]
         x = self._global_pool_features(x)
 
         # [B, 3 * D/2] -> [B, 1]

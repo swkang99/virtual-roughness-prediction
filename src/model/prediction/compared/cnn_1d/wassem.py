@@ -10,10 +10,10 @@ import torch.nn.functional as F
 
 
 class CNN1D4HA(nn.Module):
-    def __init__(self, feature_dim):
+    def __init__(self, input_dim):
         super(CNN1D4HA, self).__init__()
 
-        seq_len_after_pools = max(1, feature_dim // 4)
+        seq_len_after_pools = max(1, input_dim // 4)
 
         # =========================
         # Narrow path (kernel=3)

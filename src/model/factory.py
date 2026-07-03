@@ -17,7 +17,7 @@ MODEL_REGISTRY = {
     "cnn_1d_scirep": lambda input_dim, device: CNN1DScirep(input_dim=input_dim).to(device),
     "cnn_1d_4ha": lambda input_dim, device: CNN1D4HA(input_dim=input_dim).to(device),
     # "transformer": lambda input_dim, device: TransformerRegressor().to(device),
-    "cnn_1d_generic": lambda input_dim, device: CNN1DGeneric(input_dim=input_dim).to(device),
+    "cnn_1d_generic": lambda input_dim, device: CNN1DGeneric().to(device),
     "gated_mlp": lambda input_dim, device: GatedFusionRegressor(input_dim=input_dim).to(device),
     "gated_mlp_v2": lambda input_dim, device: GatedFusionRegressorV2(input_dim=input_dim).to(device),
 }

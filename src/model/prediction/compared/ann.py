@@ -5,11 +5,11 @@ import torch.nn.functional as F
 
 
 class ANN(nn.Module):
-    def __init__(self):
+    def __init__(self, input_dim):
         super().__init__()
         
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(3020, 200)
+        self.fc1 = nn.Linear(input_dim, 200)
         self.fc2 = nn.Linear(200, 100)
 
         self.fc3 = nn.Linear(100, 1)

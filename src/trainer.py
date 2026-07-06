@@ -7,19 +7,19 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
+import json
+from datetime import datetime
 from sklearn.metrics import mean_absolute_error
 from tqdm import tqdm
 
 from src.data.dataframe import build_dataframe_from_file
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
-from src.model.prediction.proposed.gated_mlp.gated_mlp_v1 import GatedFusionRegressor
-from src.model.prediction.proposed.gated_mlp.gated_mlp_v2 import GatedFusionRegressorV2
-from src.utils.metrics import metrics
 
 
 def is_gated_mlp(model):
-    return isinstance(model, GatedFusionRegressor) or isinstance(model, GatedFusionRegressorV2)
+    module_name = model.__class__.__module__
+    return module_name.startswith('src.model.prediction.proposed.gated_mlp')
 
 
 def is_transformer(model):
@@ -69,47 +69,11 @@ def forward_by_model(model, inputs):
     return model(inputs)
 
 
-def train_one_fold(model, dataset, device, epochs, batch_size, lr, weight_decay):
-    if is_torch_model(model):
-        train_loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            drop_last=False,
-        )
+def predict_norm(model, dataset, device, batch_size=32):
+    """Return (pred_norm, y_norm) in normalized space for a dataset and model.
 
-        criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
-        )
-
-        model.to(device)
-        model.train()
-
-        for _ in tqdm(range(epochs), desc="Train One Fold"):
-            for batch in train_loader:
-                inputs, y = prepare_batch_by_model(batch, model, device)
-
-                optimizer.zero_grad()
-                pred = forward_by_model(model, inputs)
-
-                if pred.dim() > y.dim():
-                    pred = pred.squeeze(-1)
-
-                loss = criterion(pred, y)
-                loss.backward()
-                optimizer.step()
-
-        return model
-
-    X_train, y_train = dataset_to_numpy(dataset)
-    model.fit(X_train, y_train)
-    return model
-
-
-def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=32):
+    Works for both torch modules and sklearn-style models.
+    """
     if is_torch_model(model):
         loader = DataLoader(
             dataset,
@@ -138,7 +102,6 @@ def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=32):
 
         pred_norm = np.concatenate(pred_norm_list, axis=0)
         y_norm = np.concatenate(y_norm_list, axis=0)
-
     else:
         X_test, y_norm = dataset_to_numpy(dataset)
         pred_norm = model.predict(X_test)
@@ -147,6 +110,90 @@ def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=32):
             pred_norm = pred_norm.reshape(-1, 1)
         if y_norm.ndim == 1:
             y_norm = y_norm.reshape(-1, 1)
+
+    return pred_norm, y_norm
+
+
+def train_one_fold(
+    model,
+    dataset,
+    device,
+    epochs,
+    batch_size,
+    lr,
+    weight_decay,
+    val_dataset=None,
+    y_min=None,
+    y_max=None,
+    checkpoint_callback=None,
+):
+    """Train a single fold with optional per-epoch validation and checkpointing.
+
+    checkpoint_callback: callable(model, epoch, metric) -> None
+    """
+    if is_torch_model(model):
+        train_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=False,
+        )
+
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+
+        model.to(device)
+        model.train()
+
+        best_metric = None
+
+        for epoch in tqdm(range(epochs), desc="Train One Fold"):
+            for batch in train_loader:
+                inputs, y = prepare_batch_by_model(batch, model, device)
+
+                optimizer.zero_grad()
+                pred = forward_by_model(model, inputs)
+
+                if pred.dim() > y.dim():
+                    pred = pred.squeeze(-1)
+
+                loss = criterion(pred, y)
+                loss.backward()
+                optimizer.step()
+
+            # Per-epoch validation & checkpointing
+            if val_dataset is not None and checkpoint_callback is not None:
+                try:
+                    preds, gts = evaluate_one_fold(
+                        model=model,
+                        dataset=val_dataset,
+                        device=device,
+                        y_min=y_min,
+                        y_max=y_max,
+                        batch_size=batch_size,
+                    )
+                    # Compute RMSE as scalar
+                    epoch_rmse = float(np.sqrt(np.mean((gts - preds) ** 2)))
+                    if best_metric is None or epoch_rmse < best_metric:
+                        best_metric = epoch_rmse
+                        checkpoint_callback(model, int(epoch), epoch_rmse)
+                        print(f"New best at epoch {epoch}: RMSE={epoch_rmse:.6f}")
+                except Exception as e:
+                    print(f"Warning: validation failed at epoch {epoch}: {e}")
+
+        return model
+
+    X_train, y_train = dataset_to_numpy(dataset)
+    model.fit(X_train, y_train)
+    return model
+
+
+def evaluate_one_fold(model, dataset, device, y_min, y_max, batch_size=32):
+    pred_norm, y_norm = predict_norm(model, dataset, device, batch_size=batch_size)
 
     y_min = y_min.item()
     y_max = y_max.item()
@@ -161,7 +208,6 @@ class Trainer:
     Unified trainer for managing model training and evaluation workflows.
     
     Supports:
-    - LOOCV (Leave-One-Out Cross-Validation)
     - Train/Val/Test split-based training
     - Model checkpointing
     - Metric computation
@@ -217,6 +263,18 @@ class Trainer:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+
+    def _build_normalized_dataset_from_df(self, df, y_min=None, y_max=None):
+        """Build base dataset from dataframe and return a NormalizedSubset plus min/max and input_dim."""
+        base_dataset, targets, input_dim = build_base_dataset(self.conf, df, self.device)
+
+        if y_min is None or y_max is None:
+            y_min, y_max = self.compute_y_norm(targets)
+
+        dataset = self.make_normalized_subset(
+            base_dataset, list(range(len(base_dataset))), y_min, y_max
+        )
+        return dataset, y_min, y_max, input_dim
     
     def prepare_from_dataframe(self, full_df):
         """
@@ -318,6 +376,45 @@ class Trainer:
         """
         normalized_input_dim = self._normalize_input_dim(input_dim if input_dim is not None else self.input_dim)
         return self.model_builder(self.conf, input_dim=normalized_input_dim, device=self.device)
+
+    def _checkpoint_callback(self, model_obj, epoch, metric):
+        """Instance method used as checkpoint callback to persist best model and meta."""
+        train_tag = self.conf.get('train_tag', 'default')
+        ckpt_dir = Path('experiments') / 'checkpoints' / train_tag
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_path = ckpt_dir / 'best.pt'
+        meta_path = ckpt_dir / 'best_meta.json'
+
+        try:
+            if isinstance(model_obj, torch.nn.Module):
+                torch.save({'epoch': epoch, 'state_dict': model_obj.state_dict(), 'rmse': metric}, ckpt_path)
+            else:
+                import pickle
+                with open(ckpt_path, 'wb') as f:
+                    pickle.dump(model_obj, f)
+
+            # write metadata with extra info
+            meta = {
+                'epoch': int(epoch),
+                'rmse': float(metric),
+                'train_tag': train_tag,
+                'model_class': model_obj.__class__.__name__,
+                'input_dim': None if not hasattr(self, 'input_dim') else (self.input_dim if isinstance(self.input_dim, (int, float, str, type(None))) else str(self.input_dim)),
+                'hyperparameters': {
+                    'epochs': int(self.epochs),
+                    'batch_size': int(self.batch_size),
+                    'lr': float(self.lr),
+                    'weight_decay': float(self.weight_decay),
+                    'seed': int(self.seed),
+                }
+            }
+            with open(meta_path, 'w') as mf:
+                json.dump(meta, mf, indent=2)
+
+            if self.verbose:
+                print(f"Saved best checkpoint to {ckpt_path} (epoch={epoch}, rmse={metric:.6f})")
+        except Exception as e:
+            print(f"Warning: failed to save checkpoint: {e}")
     
     def fit(self, train_dataset, val_dataset=None):
         """
@@ -346,6 +443,10 @@ class Trainer:
             batch_size=self.batch_size,
             lr=self.lr,
             weight_decay=self.weight_decay,
+            val_dataset=val_dataset,
+            y_min=(val_dataset.y_min if val_dataset is not None else None),
+            y_max=(val_dataset.y_max if val_dataset is not None else None),
+            checkpoint_callback=self._checkpoint_callback,
         )
         
         # Validate (if provided)
@@ -361,7 +462,7 @@ class Trainer:
                 y_max=y_max,
             )
             val_results = {'preds': preds, 'gts': gts}
-        
+
         return model, val_results
     
     def evaluate(self, model, dataset):
@@ -410,15 +511,8 @@ class Trainer:
         else:
             raise ValueError(f'Unsupported split name: {split_name}')
 
-        base_dataset, targets, input_dim = build_base_dataset(
-            self.conf, df, self.device
-        )
-
-        if y_min is None or y_max is None:
-            y_min, y_max = self.compute_y_norm(targets)
-
-        dataset = self.make_normalized_subset(
-            base_dataset, list(range(len(base_dataset))), y_min, y_max
+        dataset, y_min, y_max, input_dim = self._build_normalized_dataset_from_df(
+            df, y_min=y_min, y_max=y_max
         )
 
         cache_entry = {
@@ -452,12 +546,8 @@ class Trainer:
         """
 
         if train_df is not None:
-            train_base, train_targets, input_dim = build_base_dataset(
-                self.conf, train_df, self.device
-            )
-            y_min, y_max = self.compute_y_norm(train_targets)
-            train_dataset = self.make_normalized_subset(
-                train_base, list(range(len(train_base))), y_min, y_max
+            train_dataset, y_min, y_max, input_dim = self._build_normalized_dataset_from_df(
+                train_df
             )
             self.input_dim = input_dim
         else:
@@ -466,9 +556,8 @@ class Trainer:
             self.input_dim = train_cache['input_dim']
 
         if val_df is not None:
-            val_base, _, _ = build_base_dataset(self.conf, val_df, self.device)
-            val_dataset = self.make_normalized_subset(
-                val_base, list(range(len(val_base))), train_dataset.y_min, train_dataset.y_max
+            val_dataset, _, _, _ = self._build_normalized_dataset_from_df(
+                val_df, y_min=train_dataset.y_min, y_max=train_dataset.y_max
             )
         else:
             val_cache = self._get_or_build_split_dataset(
@@ -477,9 +566,8 @@ class Trainer:
             val_dataset = val_cache['dataset']
 
         if test_df is not None:
-            test_base, _, _ = build_base_dataset(self.conf, test_df, self.device)
-            test_dataset = self.make_normalized_subset(
-                test_base, list(range(len(test_base))), train_dataset.y_min, train_dataset.y_max
+            test_dataset, _, _, _ = self._build_normalized_dataset_from_df(
+                test_df, y_min=train_dataset.y_min, y_max=train_dataset.y_max
             )
         else:
             test_cache = self._get_or_build_split_dataset(

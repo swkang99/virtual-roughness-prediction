@@ -381,9 +381,11 @@ class Trainer:
         """Instance method used as checkpoint callback to persist best model and meta."""
         train_tag = self.conf.get('train_tag', 'default')
         ckpt_dir = Path('experiments') / 'checkpoints' / train_tag
+        run_dir = Path('experiments') / 'runs' / train_tag
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
         ckpt_path = ckpt_dir / 'best.pt'
-        meta_path = ckpt_dir / 'best_meta.json'
+        meta_path = run_dir / 'best_meta.json'
 
         try:
             if isinstance(model_obj, torch.nn.Module):
@@ -412,7 +414,7 @@ class Trainer:
                 json.dump(meta, mf, indent=2)
 
             if self.verbose:
-                print(f"Saved best checkpoint to {ckpt_path} (epoch={epoch}, rmse={metric:.6f})")
+                print(f"Saved best checkpoint to {ckpt_path} and metadata to {meta_path} (epoch={epoch}, rmse={metric:.6f})")
         except Exception as e:
             print(f"Warning: failed to save checkpoint: {e}")
     

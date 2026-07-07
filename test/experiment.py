@@ -6,18 +6,22 @@ from src.trainer import Trainer
 from src.model.factory import create_model
 
 
-def build_conf(base_conf, model_name):
+def build_conf(base_conf, model_name, train_tag_pattern=None):
     conf = copy.deepcopy(base_conf)
     conf["model"] = model_name
-    conf["train_tag"] = f"patch_roughness_{model_name}_300epoch"
+    if train_tag_pattern:
+        conf["train_tag"] = train_tag_pattern.format(model=model_name)
+    else:
+        conf["train_tag"] = f"patch_roughness_{model_name}_300epoch"
     return conf
 
 
 def run_models(trainer, base_conf, model_list, args=None):
     """Run multi-model training with optional CLI argument overrides."""
     results = {}
+    train_tag_pattern = args.train_tag if args and args.train_tag else None
     for model_name in model_list:
-        conf = build_conf(base_conf, model_name)
+        conf = build_conf(base_conf, model_name, train_tag_pattern=train_tag_pattern)
         trainer.conf = conf
 
         # Use CLI args if provided, else fall back to config values
@@ -52,6 +56,7 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=None, help="Weight decay (overrides config.yaml)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (overrides config.yaml)")
     parser.add_argument("--model", type=str, default=None, help="Train specific model only (e.g., transformer)")
+    parser.add_argument("--train_tag", type=str, default=None, help="Train tag pattern with {model} placeholder (e.g., 'my_exp_{model}')")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     args = parser.parse_args()
 

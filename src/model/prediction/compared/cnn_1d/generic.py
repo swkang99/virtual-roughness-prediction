@@ -42,7 +42,7 @@ class CNN1DGeneric(nn.Module):
             x = x.unsqueeze(1)           # legacy support
         elif x.ndim != 3:
             raise ValueError(f"Unsupported input shape: {x.shape}")
-
+        print(x.shape)
         x = self.features(x)
         x = self.regressor(x)
         return x

@@ -14,7 +14,7 @@ class CNN1D4HA(nn.Module):
         super(CNN1D4HA, self).__init__()
 
         seq_len_after_pools = max(1, input_dim // 4)
-
+        
         # =========================
         # Narrow path (kernel=3)
         # =========================

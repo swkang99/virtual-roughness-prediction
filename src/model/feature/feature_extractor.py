@@ -34,9 +34,20 @@ class FeatureExtractor:
         feature_vector, _ = extract_lbp_feature(image_array, grid=(7, 7))
         return np.asarray(feature_vector, dtype=np.float32)
 
-    def extract_resnet50_features(self, img_tensor):
+    def extract_resnet50_features(self, image_array):
+        if isinstance(image_array, np.ndarray):
+            if image_array.dtype != np.uint8:
+                image_array = image_array.astype(np.uint8)
+            image_array = Image.fromarray(image_array)
+
+        img_tensor = self.transform_resnet50(image_array)
+
+        if img_tensor.shape[0] == 1:
+            img_tensor = img_tensor.repeat(3, 1, 1)
+
         with torch.no_grad():
             features = self.model_resnet50(img_tensor.unsqueeze(0).to(self.device))
+
         return features.cpu().numpy().flatten().astype(np.float32)
 
     def extract_single_image_features(self, img_path):
@@ -45,11 +56,7 @@ class FeatureExtractor:
         
         glcm_feat = self.extract_glcm_features(texture_np_2d)
         lbp_feat = self.extract_lbp_features(texture_np_2d)
-
-        img_tensor = self.transform_resnet50(texture_img)
-        if img_tensor.shape[0] == 1:
-            img_tensor = img_tensor.repeat(3, 1, 1) 
-        resnet_feat = self.extract_resnet50_features(img_tensor)
+        resnet_feat = self.extract_resnet50_features(texture_np_2d)
 
         return np.concatenate([glcm_feat, lbp_feat, resnet_feat]).astype(np.float32)
 

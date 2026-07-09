@@ -547,11 +547,8 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
 
         return x
 
-    def forward(self, height_img1, height_img2, height_img3):
-        # height_img1: texture image
-        # height_img2: height map
-        # height_img3: normal map
-        x = self._build_5ch_feature_input(height_img1, height_img2, height_img3)
+    def forward(self, texture_image, height_map, normal_map):
+        x = self._build_5ch_feature_input(texture_image, height_map, normal_map)
 
         # [B, 5, 256, 256]
         # -> modality-aware token embedding

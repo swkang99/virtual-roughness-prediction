@@ -1,17 +1,15 @@
 """
 Trainer class for encapsulating model training and evaluation logic.
 """
+import json
 import random
 import numpy as np
+from pathlib import Path
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from pathlib import Path
-import json
-from datetime import datetime
 from sklearn.metrics import mean_absolute_error
-from tqdm import tqdm
-
 from src.data.dataframe import build_dataframe_from_file
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
@@ -22,9 +20,11 @@ def is_gated_mlp(model):
     return module_name.startswith('src.model.prediction.proposed.gated_mlp')
 
 
-def is_transformer(model):
+def is_end_to_end(model):
     module_name = model.__class__.__module__
-    return module_name.startswith('src.model.prediction.proposed.transformer')
+    is_transformer = module_name.startswith('src.model.prediction.proposed.transformer')
+    is_cnn_1d_generic = module_name.startswith('src.model.prediction.compared.cnn_1d.generic')
+    return is_transformer or is_cnn_1d_generic
 
 
 def is_torch_model(model):
@@ -39,7 +39,7 @@ def prepare_batch_by_model(batch, model, device):
     FeatureDataset 기준:
         batch = (x, y)
     """
-    if is_gated_mlp(model) or is_transformer(model):
+    if is_gated_mlp(model) or is_end_to_end(model):
         texture, height, normal, y = batch
         texture = texture.to(device).float()
         height = height.to(device).float()
@@ -63,7 +63,7 @@ def prepare_batch_by_model(batch, model, device):
 
 
 def forward_by_model(model, inputs):
-    if is_gated_mlp(model) or is_transformer(model):
+    if is_gated_mlp(model) or is_end_to_end(model):
         texture, height, normal = inputs
         return model(texture, height, normal)
     return model(inputs)

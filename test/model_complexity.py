@@ -9,12 +9,13 @@ MODEL_RECOMMENDED_INPUTS = {
     "ann": {"input_dim": 3955, "input_res": (1, 3955)},
     "cnn_1d_scirep": {"input_dim": 3955, "input_res": (1, 3955)},
     "cnn_1d_4ha": {"input_dim": 3955, "input_res": (1, 3955)},
-    "cnn_1d_generic": {"input_dim": None, "input_res": (3, 65536)},
+    "cnn_1d_generic": {
+        "input_dim": None,
+        "input_res": ((1, 256, 256), (1, 256, 256), (3, 256, 256)),
+    },
     "transformer": {
         "input_dim": None,
-        # (height_img1, height_img2, height_img3)의 각 입력 shape
-        # 각 항목은 batch dimension 제외 shape
-        "input_res": ((3, 256, 256), (1, 256, 256), (1, 256, 256)),
+        "input_res": ((1, 256, 256), (1, 256, 256), (3, 256, 256)),
     },
     "gated_mlp": {
         "input_dim": {"texture_dim": 1024, "height_dim": 1024, "normal_dim": 1024},
@@ -27,27 +28,7 @@ MODEL_RECOMMENDED_INPUTS = {
 }
 
 
-class _1DCNNFlopsWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, x):
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-
-        if x.dim() == 2:
-            x = x.unsqueeze(0)
-
-        if x.dim() >= 4:
-            x = x.reshape(x.size(0), x.size(1), -1)
-
-        return self.model(x)
-
-
 def _wrap_model_for_flops(model_name, model):
-    if model_name in {"cnn_1d_scirep", "cnn_1d_4ha", "cnn_1d_generic"}:
-        return _1DCNNFlopsWrapper(model)
     return model
 
 
@@ -69,34 +50,34 @@ def _make_tensor(shape, dtype, device):
     return torch.randn((1, *shape), dtype=dtype, device=device)
 
 
-def _transformer_input_constructor_factory(model):
+def _triple_input_constructor_factory(model):
     dtype, device = _infer_dtype_and_device(model)
 
     def prepare_input(input_res):
         if not isinstance(input_res, (tuple, list)) or len(input_res) != 3:
             raise ValueError(
-                "Transformer input_res must be a 3-tuple like "
-                "((3,256,256), (1,256,256), (1,256,256))"
+                "Multi-input input_res must be a 3-tuple like "
+                "((1,256,256), (1,256,256), (3,256,256))"
             )
 
-        height1_shape, height2_shape, height3_shape = input_res
+        texture_shape, height_shape, normal_shape = input_res
 
-        height_img1 = _make_tensor(height1_shape, dtype, device)
-        height_img2 = _make_tensor(height2_shape, dtype, device)
-        height_img3 = _make_tensor(height3_shape, dtype, device)
+        texture_image = _make_tensor(texture_shape, dtype, device)
+        height_map = _make_tensor(height_shape, dtype, device)
+        normal_map = _make_tensor(normal_shape, dtype, device)
 
         return {
-            "height_img1": height_img1,
-            "height_img2": height_img2,
-            "height_img3": height_img3,
+            "texture_image": texture_image,
+            "height_map": height_map,
+            "normal_map": normal_map,
         }
 
     return prepare_input
 
 
 def _input_constructor_for_model(model_name, model):
-    if model_name == "transformer":
-        return _transformer_input_constructor_factory(model)
+    if model_name in {"transformer", "cnn_1d_generic"}:
+        return _triple_input_constructor_factory(model)
     return None
 
 
@@ -184,8 +165,6 @@ def parse_input_res(s, model_name=None):
 
     s = s.strip()
 
-    # transformer multi-input 예:
-    # "3,256,256;1,256,256;1,256,256"
     if ";" in s:
         return tuple(parse_shape_string(part) for part in s.split(";"))
 
@@ -206,7 +185,7 @@ def main():
         default=None,
         help=(
             'Single input example: "3,224,224" or "3,65536". '
-            'Multi-input example: "3,256,256;1,256,256;1,256,256"'
+            'Multi-input example: "1,256,256;1,256,256;3,256,256"'
         ),
     )
     parser.add_argument("--compute_flops", action="store_true", help="Compute FLOPs/MACs using ptflops")

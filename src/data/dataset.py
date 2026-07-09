@@ -24,7 +24,7 @@ class PatchDataset(Dataset):
         height_map = self.transform(height_map)
 
         normal_path = row["normal_path"]
-        normal_map = Image.open(normal_path).convert("L")
+        normal_map = Image.open(normal_path).convert("RGB")
         normal_map = self.transform(normal_map)
         
         label = np.array([row["roughness"]], dtype=np.float32) # (1,)

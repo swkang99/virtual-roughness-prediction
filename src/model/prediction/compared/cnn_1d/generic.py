@@ -2,12 +2,13 @@
 import torch
 import torch.nn as nn
 
+
 class CNN1DGeneric(nn.Module):
     def __init__(self, output_dim=1, dropout=0.3):
         super().__init__()
 
         self.features = nn.Sequential(
-            nn.Conv1d(3, 32, kernel_size=9, stride=1, padding=4),
+            nn.Conv1d(5, 32, kernel_size=9, stride=1, padding=4),
             nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.MaxPool1d(4),
@@ -31,18 +32,36 @@ class CNN1DGeneric(nn.Module):
             nn.Linear(64, output_dim)
         )
 
-    def forward(self, x):
-        if x.ndim == 5 and x.shape[1] == 1:
-            x = x.squeeze(1)
+    def forward(self, texture_image, height_map, normal_map):
+        inputs = [texture_image, height_map, normal_map]
+        processed = []
+
+        for x in inputs:
+            if x.ndim == 2:
+                x = x.unsqueeze(1)   # legacy support: (B, L) -> (B, 1, L)
+
+            elif x.ndim == 3:
+                # (B, H, W) -> (B, 1, H, W) 로 해석
+                x = x.unsqueeze(1)
+
+            elif x.ndim == 5 and x.shape[1] == 1:
+                x = x.squeeze(1)
+
+            elif x.ndim != 4:
+                raise ValueError(f"Unsupported input shape: {x.shape}")
+
+            processed.append(x)
+
+        x = torch.cat(processed, dim=1)   # (B, 3, H, W)
 
         if x.ndim == 4:
             b, c, h, w = x.shape
-            x = x.reshape(b, c, h * w)   # (B, 3, 65536)
+            x = x.reshape(b, c, h * w)    # (B, 3, H*W)
         elif x.ndim == 2:
-            x = x.unsqueeze(1)           # legacy support
+            x = x.unsqueeze(1)
         elif x.ndim != 3:
-            raise ValueError(f"Unsupported input shape: {x.shape}")
-        print(x.shape)
+            raise ValueError(f"Unsupported concatenated shape: {x.shape}")
+
         x = self.features(x)
         x = self.regressor(x)
         return x

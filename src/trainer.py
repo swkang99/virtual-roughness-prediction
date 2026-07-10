@@ -435,7 +435,7 @@ class Trainer:
         model = self.build_model(input_dim=self.input_dim)
         
         print(f"Fitting model : {type(model).__name__}")
-        # print(f"y_min: {}")
+        
         # Train
         model = train_one_fold(
             model=model,

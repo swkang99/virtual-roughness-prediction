@@ -435,7 +435,7 @@ class Trainer:
         model = self.build_model(input_dim=self.input_dim)
         
         print(f"Fitting model : {type(model).__name__}")
-
+        # print(f"y_min: {}")
         # Train
         model = train_one_fold(
             model=model,
@@ -446,16 +446,16 @@ class Trainer:
             lr=self.lr,
             weight_decay=self.weight_decay,
             val_dataset=val_dataset,
-            y_min=(val_dataset.y_min if val_dataset is not None else None),
-            y_max=(val_dataset.y_max if val_dataset is not None else None),
+            y_min=(train_dataset.y_min if val_dataset is not None else None),
+            y_max=(train_dataset.y_max if val_dataset is not None else None),
             checkpoint_callback=self._checkpoint_callback,
         )
         
         # Validate (if provided)
         val_results = None
         if val_dataset is not None:
-            y_min = val_dataset.y_min
-            y_max = val_dataset.y_max
+            y_min = train_dataset.y_min
+            y_max = train_dataset.y_max
             preds, gts = evaluate_one_fold(
                 model=model,
                 dataset=val_dataset,
@@ -467,7 +467,7 @@ class Trainer:
 
         return model, val_results
     
-    def evaluate(self, model, dataset):
+    def evaluate(self, model, dataset, y_min=None, y_max=None):
         """
         Evaluate model on a dataset.
         
@@ -478,8 +478,8 @@ class Trainer:
         Returns:
             tuple: (predictions, ground_truths)
         """
-        y_min = dataset.y_min
-        y_max = dataset.y_max
+        y_min = dataset.y_min if y_min is None else y_min
+        y_max = dataset.y_max if y_max is None else y_max
         preds, gts = evaluate_one_fold(
             model=model,
             dataset=dataset,
@@ -578,7 +578,12 @@ class Trainer:
             test_dataset = test_cache['dataset']
 
         model, val_results = self.fit(train_dataset, val_dataset=val_dataset)
-        preds, gts = self.evaluate(model, test_dataset)
+        preds, gts = self.evaluate(
+            model, 
+            test_dataset, 
+            y_min=train_dataset.y_min,
+            y_max=train_dataset.y_max,
+        )
         test_results = {'preds': preds, 'gts': gts}
 
         # Optionally compute metrics

@@ -4,7 +4,6 @@ opencv_python==4.13.0.92
 pandas==3.0.3
 Pillow==12.3.0
 ptflops==0.7.5
-PyYAML==6.0.2
 PyYAML==6.0.3
 scikit_learn==1.9.0
 scikit-image==0.24.0

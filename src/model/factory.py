@@ -12,7 +12,7 @@ MODEL_REGISTRY = {
     "lr": lambda input_dim, device: linear_model.LinearRegression(),
     "svr": lambda input_dim, device: SVR(),
     "ann": lambda input_dim, device: ANN(input_dim=input_dim).to(device),
-    "cnn_1d_scirep": lambda input_dim, device: CNN1DScirep(input_dim=input_dim).to(device),
+    "cnn_1d_scirep": lambda input_dim, device: CNN1DScirep(feature_dim=input_dim).to(device),
     "cnn_1d_4ha": lambda input_dim, device: CNN1D4HA(input_dim=input_dim).to(device),
     "transformer": lambda input_dim, device: TransformerRegressor().to(device),
     "cnn_1d_generic": lambda input_dim, device: CNN1DGeneric().to(device),

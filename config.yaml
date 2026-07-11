@@ -3,7 +3,7 @@
 # =============================================================================
 
 # Default Training settings
-batch_size: 128
+batch_size: 56
 epochs: 300
 num_workers: 0
 learning_rate: 1e-3
@@ -15,9 +15,9 @@ train_tag: 'default'
 # =============================================================================
 
 # Data paths
-data_train_path: 'data/split/train'
-data_val_path: 'data/split/val'
-data_test_path: 'data/split/test'
+data_train_path: 'src/data/split/train'
+data_val_path: 'src/data/split/val'
+data_test_path: 'src/data/split/test'
 data_patch_path: 'patches'
 
 # =============================================================================
@@ -33,4 +33,4 @@ data_patch_path: 'patches'
 #   6. cnn_1d_generic : Simple 1D-CNN for comparing with proposed model
 #   7. transformer    : Proposed Transformer Regressor 
 #   8. gated_mlp      : Proposed Gated Fusion MLP
-model: gated_mlp_v2
+model: transformer

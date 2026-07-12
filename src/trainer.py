@@ -1,6 +1,7 @@
 """
 Trainer class for encapsulating model training and evaluation logic.
 """
+import csv
 import json
 import random
 import numpy as np
@@ -181,7 +182,7 @@ def train_one_fold(
 ):
     """Train a single fold with optional per-epoch validation and checkpointing.
 
-    checkpoint_callback: callable(model, epoch, metric) -> None
+    checkpoint_callback: callable(model, epoch, mae, rmse) -> None
     """
     if is_torch_model(model):
         train_loader = DataLoader(
@@ -204,6 +205,10 @@ def train_one_fold(
         best_metric = None
 
         for epoch in tqdm(range(epochs), desc="Train One Fold"):
+            # Validation switches the model to eval mode, so restore train mode
+            # at the beginning of every epoch.
+            model.train()
+
             for batch in train_loader:
                 inputs, y = prepare_batch_by_model(batch, model, device)
 
@@ -228,12 +233,21 @@ def train_one_fold(
                         y_max=y_max,
                         batch_size=batch_size,
                     )
-                    # Compute RMSE as scalar
+                    # Compute scalar validation metrics.
+                    epoch_mae = float(mean_absolute_error(gts, preds))
                     epoch_rmse = float(np.sqrt(np.mean((gts - preds) ** 2)))
                     if best_metric is None or epoch_rmse < best_metric:
                         best_metric = epoch_rmse
-                        checkpoint_callback(model, int(epoch), epoch_rmse)
-                        print(f"New best at epoch {epoch}: RMSE={epoch_rmse:.6f}")
+                        checkpoint_callback(
+                            model,
+                            int(epoch),
+                            epoch_mae,
+                            epoch_rmse,
+                        )
+                        print(
+                            f"New best at epoch {epoch}: "
+                            f"MAE={epoch_mae:.6f}, RMSE={epoch_rmse:.6f}"
+                        )
                 except Exception as e:
                     print(f"Warning: validation failed at epoch {epoch}: {e}")
 
@@ -299,6 +313,7 @@ class Trainer:
         self.verbose = conf.get('verbose', True)
 
         self.input_dim = None
+        self.best_epoch = None
     
     def set_seed(self, seed=None):
         """
@@ -429,46 +444,118 @@ class Trainer:
         normalized_input_dim = self._normalize_input_dim(input_dim if input_dim is not None else self.input_dim)
         return self.model_builder(self.conf, input_dim=normalized_input_dim, device=self.device)
 
-    def _checkpoint_callback(self, model_obj, epoch, metric):
-        """Instance method used as checkpoint callback to persist best model and meta."""
+    def _checkpoint_callback(self, model_obj, epoch, mae, rmse):
+        """Persist only the model for the best validation RMSE epoch."""
         train_tag = self.conf.get('train_tag', 'default')
         ckpt_dir = Path('experiments') / 'checkpoints' / train_tag
-        run_dir = Path('experiments') / 'runs' / train_tag
         ckpt_dir.mkdir(parents=True, exist_ok=True)
-        run_dir.mkdir(parents=True, exist_ok=True)
         ckpt_path = ckpt_dir / 'best.pt'
-        meta_path = run_dir / 'best_meta.json'
 
         try:
             if isinstance(model_obj, torch.nn.Module):
-                torch.save({'epoch': epoch, 'state_dict': model_obj.state_dict(), 'rmse': metric}, ckpt_path)
+                torch.save(
+                    {
+                        'epoch': epoch,
+                        'mae': mae,
+                        'rmse': rmse,
+                        'state_dict': model_obj.state_dict(),
+                    },
+                    ckpt_path,
+                )
             else:
                 import pickle
                 with open(ckpt_path, 'wb') as f:
                     pickle.dump(model_obj, f)
 
-            # write metadata with extra info
-            meta = {
-                'epoch': int(epoch),
-                'rmse': float(metric),
-                'train_tag': train_tag,
-                'model_class': model_obj.__class__.__name__,
-                'input_dim': None if not hasattr(self, 'input_dim') else (self.input_dim if isinstance(self.input_dim, (int, float, str, type(None))) else str(self.input_dim)),
-                'hyperparameters': {
-                    'epochs': int(self.epochs),
-                    'batch_size': int(self.batch_size),
-                    'lr': float(self.lr),
-                    'weight_decay': float(self.weight_decay),
-                    'seed': int(self.seed),
-                }
-            }
-            with open(meta_path, 'w') as mf:
-                json.dump(meta, mf, indent=2)
-
             if self.verbose:
-                print(f"Saved best checkpoint to {ckpt_path} and metadata to {meta_path} (epoch={epoch}, rmse={metric:.6f})")
+                print(
+                    f"Saved best checkpoint to {ckpt_path} "
+                    f"(epoch={epoch}, mae={mae:.6f}, rmse={rmse:.6f})"
+                )
         except Exception as e:
             print(f"Warning: failed to save checkpoint: {e}")
+
+    def _save_final_results(
+        self,
+        model,
+        val_results,
+        test_results,
+        test_image_ids,
+    ):
+        """Save final metadata and per-sample test results after best-model test."""
+        train_tag = self.conf.get('train_tag', 'default')
+        run_dir = Path('experiments') / 'runs' / train_tag
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        val_preds = np.asarray(val_results['preds'])
+        val_gts = np.asarray(val_results['gts'])
+        test_preds = np.asarray(test_results['preds'])
+        test_gts = np.asarray(test_results['gts'])
+
+        val_mae = float(mean_absolute_error(val_gts, val_preds))
+        val_rmse = float(np.sqrt(np.mean((val_gts - val_preds) ** 2)))
+        test_mae = float(mean_absolute_error(test_gts, test_preds))
+        test_rmse = float(np.sqrt(np.mean((test_gts - test_preds) ** 2)))
+
+        if self.best_epoch is None:
+            raise RuntimeError(
+                "Best checkpoint epoch is unavailable; final results cannot be saved."
+            )
+
+        test_preds_flat = test_preds.reshape(-1)
+        test_gts_flat = test_gts.reshape(-1)
+
+        if len(test_image_ids) != len(test_preds_flat):
+            raise ValueError(
+                "The number of test image IDs does not match the number of predictions: "
+                f"{len(test_image_ids)} != {len(test_preds_flat)}"
+            )
+
+        meta = {
+            'epoch': int(self.best_epoch),
+            'val_mae': val_mae,
+            'val_rmse': val_rmse,
+            'test_mae': test_mae,
+            'test_rmse': test_rmse,
+            'train_tag': train_tag,
+            'model_class': model.__class__.__name__,
+            'hyperparameters': {
+                'epochs': int(self.epochs),
+                'batch_size': int(self.batch_size),
+                'lr': float(self.lr),
+                'weight_decay': float(self.weight_decay),
+                'seed': int(self.seed),
+            },
+        }
+
+        csv_path = run_dir / f'{train_tag}_results.csv'
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'image_id',
+                'ground_truth_roughness',
+                'prediction_roughness',
+                'abs_error_roughness',
+            ])
+            for image_id, gt, pred in zip(
+                test_image_ids,
+                test_gts_flat,
+                test_preds_flat,
+            ):
+                writer.writerow([
+                    image_id,
+                    float(gt),
+                    float(pred),
+                    float(abs(gt - pred)),
+                ])
+
+        meta_path = run_dir / 'best_meta.json'
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=2)
+
+        if self.verbose:
+            print(f"Saved final metadata to {meta_path}")
+            print(f"Saved test results to {csv_path}")
     
     def fit(self, train_dataset, val_dataset=None):
         """
@@ -487,6 +574,28 @@ class Trainer:
         model = self.build_model(input_dim=self.input_dim)
         
         print(f"Fitting model : {type(model).__name__}")
+        self.best_epoch = None
+
+        # Remove stale best-result files before starting a new torch-model run.
+        best_path = None
+        if val_dataset is not None and isinstance(model, torch.nn.Module):
+            train_tag = self.conf.get('train_tag', 'default')
+            best_path = (
+                Path('experiments')
+                / 'checkpoints'
+                / train_tag
+                / 'best.pt'
+            )
+            run_dir = Path('experiments') / 'runs' / train_tag
+            best_meta_path = run_dir / 'best_meta.json'
+            results_csv_path = run_dir / f'{train_tag}_results.csv'
+
+            if best_path.exists():
+                best_path.unlink()
+            if best_meta_path.exists():
+                best_meta_path.unlink()
+            if results_csv_path.exists():
+                results_csv_path.unlink()
         
         # Train
         model = train_one_fold(
@@ -502,6 +611,22 @@ class Trainer:
             y_max=(train_dataset.y_max if val_dataset is not None else None),
             checkpoint_callback=self._checkpoint_callback,
         )
+
+        # Use the best-validation-RMSE parameters for all subsequent
+        # validation and test evaluation, instead of the last epoch.
+        if best_path is not None:
+            if not best_path.exists():
+                raise RuntimeError(
+                    "No best validation RMSE checkpoint was created during training."
+                )
+
+            checkpoint = torch.load(best_path, map_location=self.device)
+            model.load_state_dict(checkpoint['state_dict'])
+            model.to(self.device)
+            self.best_epoch = int(checkpoint['epoch'])
+
+            if self.verbose:
+                print(f"Loaded best validation RMSE checkpoint from {best_path}")
         
         # Validate (if provided)
         val_results = None
@@ -571,6 +696,7 @@ class Trainer:
 
         cache_entry = {
             'dataset': dataset,
+            'dataframe': df,
             'input_dim': input_dim,
             'y_min': y_min,
             'y_max': y_max,
@@ -628,6 +754,7 @@ class Trainer:
                 'test', train_dataset.y_min, train_dataset.y_max
             )
             test_dataset = test_cache['dataset']
+            test_df = test_cache['dataframe']
 
         model, val_results = self.fit(train_dataset, val_dataset=val_dataset)
         preds, gts = self.evaluate(
@@ -656,6 +783,22 @@ class Trainer:
                 test_mae = mean_absolute_error(test_gts, test_preds, multioutput='raw_values')
                 test_rmse = np.sqrt(np.mean((test_gts - test_preds) ** 2, axis=0))
                 metrics_dict['test'] = {'mae': test_mae, 'rmse': test_rmse}
+
+        if (
+            isinstance(model, torch.nn.Module)
+            and val_results is not None
+            and test_results is not None
+        ):
+            test_image_ids = [
+                Path(path).stem
+                for path in test_df['texture_path'].tolist()
+            ]
+            self._save_final_results(
+                model=model,
+                val_results=val_results,
+                test_results=test_results,
+                test_image_ids=test_image_ids,
+            )
 
         return {
             'model': model,

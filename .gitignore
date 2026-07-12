@@ -208,4 +208,5 @@ $RECYCLE.BIN/
 /src/features/
 /experiments/
 /output
-train_and_test_all_model_repeatedly.sh
+/results/
+/logs/

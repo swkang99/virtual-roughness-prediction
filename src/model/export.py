@@ -7,18 +7,18 @@ import torch
 
 
 CHECKPOINT_PATHS = {
-    "cnn_1d_generic": Path("experiments/checkpoints/cnn_1d_generic_300epoch/best.pt"),
-    "transformer": Path("experiments/checkpoints/transformer_H_300epoch/best.pt"),
+    "cnn_1d_generic": Path("experiments/checkpoints/patch_roughness_cnn_1d_generic_300epoch/best.pt"),
+    "transformer": Path("experiments/checkpoints/patch_roughness_transformer_300epoch/best.pt"),
 }
 
 EXPORT_PATHS = {
-    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic.onnx"),
-    "transformer": Path("output/exports/onnx/transformer.onnx"),
+    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic/cnn_1d_generic.onnx"),
+    "transformer": Path("output/exports/onnx/transformer/transformer.onnx"),
 }
 
 META_PATHS = {
-    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic_meta.json"),
-    "transformer": Path("output/exports/onnx/transformer_meta.json"),
+    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic/cnn_1d_generic_meta.json"),
+    "transformer": Path("output/exports/onnx/transformer/transformer_meta.json"),
 }
 
 

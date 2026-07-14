@@ -204,9 +204,7 @@ $RECYCLE.BIN/
 .vscode/
 
 # Data & Result files
-/src/data/split/
-/src/features/
+/data/
 /experiments/
-/output
+/output/
 /results/
-/logs/

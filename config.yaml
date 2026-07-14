@@ -15,9 +15,9 @@ train_tag: 'default'
 # =============================================================================
 
 # Data paths
-data_train_path: 'src/data/split/train'
-data_val_path: 'src/data/split/val'
-data_test_path: 'src/data/split/test'
+data_train_path: 'data/split/train'
+data_val_path: 'data/split/val'
+data_test_path: 'data/split/test'
 data_patch_path: 'patches'
 
 # =============================================================================

@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from src.data.dataset import PatchDataset, PatchFeatureDataset
+from data.dataset import PatchDataset, PatchFeatureDataset
 from src.model.feature.feature_extractor import FeatureExtractor
 
 
@@ -23,10 +23,9 @@ def _infer_split_name(full_df):
     Infer split name from texture_path.
 
     Expected examples:
-        .../split/train/...
-        .../split/val/...
-        .../split/valid/...
-        .../split/test/...
+        .../train/...
+        .../val/...
+        .../test/...
     """
     if len(full_df) == 0 or "texture_path" not in full_df.columns:
         return "unknown"
@@ -49,17 +48,17 @@ def _infer_split_name(full_df):
 def _get_feature_cache_root(conf):
     """
     Default:
-        src/features
+        data/features
 
     Optional config.yaml override:
-        feature_cache_root: src/features
+        feature_cache_root: data/features
     """
     if conf is not None and "feature_cache_root" in conf:
         return Path(conf["feature_cache_root"])
 
-    # factory.py is located at src/data/factory.py
-    # parents[1] == src/
-    return Path(__file__).resolve().parents[1] / "features"
+    # factory.py is located at data/factory.py
+    # parent == data/
+    return Path(__file__).resolve().parent / "features"
 
 
 def _get_feature_cache_path(conf, full_df):
@@ -70,8 +69,7 @@ def _get_feature_cache_path(conf, full_df):
 
 def _get_texture_paths(full_df):
     """
-    Important:
-    Store paths as a normal unicode string array, not object array.
+    Store paths as a unicode string array, not an object array.
     This avoids:
         Object arrays cannot be loaded when allow_pickle=False
     """
@@ -153,7 +151,6 @@ def _load_feature_cache(cache_path, full_df):
         return features, cached_targets
 
     except Exception as e:
-        # This also handles old caches saved with object arrays.
         _remove_cache(cache_path, f"failed to load cache: {e}")
         return None
 
@@ -176,7 +173,7 @@ def build_feature_base_dataset(full_df, device, conf=None):
     Build feature-based dataset.
 
     If a valid cache exists:
-        load src/features/{train,val,test}/features.npz
+        load data/features/{train,val,test}/features.npz
 
     If the cache is missing or does not match current data:
         remove old cache
@@ -227,46 +224,3 @@ def build_base_dataset(conf, full_df, device):
 
     else:
         raise ValueError(f"Unsupported dataset type: {dataset_type}")
-
-
-
-'''
-
-import numpy as np
-from src.data.dataset import PatchDataset, PatchFeatureDataset
-from src.model.feature.feature_extractor import FeatureExtractor
-
-MODEL_DATASET_TYPE = {
-    "lr": "feature",
-    "svr": "feature",
-    "ann": "feature",
-    "cnn_1d_scirep": "feature",
-    "cnn_1d_4ha": "feature",
-    "cnn_1d_generic": "maps",
-    "transformer": "maps",
-    "gated_mlp": "feature",
-    "gated_mlp_v2": "feature",
-}
-
-def build_feature_base_dataset(full_df, device):
-    feature_extractor = FeatureExtractor(device)
-    full_features, full_targets = feature_extractor.precompute_features_and_targets(full_df)
-    input_dim = full_features.shape[1]
-    return PatchFeatureDataset(full_features, full_targets), full_targets, input_dim
-
-def build_maps_base_dataset(full_df):
-    base_dataset = PatchDataset(full_df)
-    full_targets = full_df["roughness"].to_numpy(dtype=np.float32).reshape(-1, 1)
-    return base_dataset, full_targets, None
-
-def build_base_dataset(conf, full_df, device):
-    dataset_type = MODEL_DATASET_TYPE[conf["model"]]
-
-    if dataset_type == "feature":
-        return build_feature_base_dataset(full_df, device)
-    elif dataset_type == "maps":
-        return build_maps_base_dataset(full_df)
-    else:
-        raise ValueError(f"Unsupported dataset type: {dataset_type}")
-    
-'''

@@ -3,7 +3,7 @@ import yaml
 import argparse
 
 from src.trainer import Trainer
-from src.model.factory import create_model
+from src.model.factory import create_model, MODEL_REGISTRY
 
 
 def build_conf(base_conf, model_name, train_tag_pattern=None):
@@ -66,7 +66,7 @@ def main():
     if args.model:
         model_list = [args.model]
     else:
-        model_list = ["transformer"]
+        model_list = list(MODEL_REGISTRY.keys())
 
     trainer = Trainer(conf=copy.deepcopy(base_conf), model_builder=create_model)
     run_models(trainer, base_conf, model_list, args)

@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from data.texture_maps import process_texture
+from src.data.texture_maps import process_texture
 from tqdm import tqdm
     
 def _load_ha_labels(csv_path, header=None):

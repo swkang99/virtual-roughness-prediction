@@ -11,9 +11,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import mean_absolute_error
-from data.dataframe import build_dataframe_from_file
-from data.dataset import NormalizedSubset, dataset_to_numpy
-from data.factory import build_base_dataset, MODEL_DATASET_TYPE
+from src.data.dataframe import build_dataframe_from_file
+from src.data.dataset import NormalizedSubset, dataset_to_numpy
+from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
 
 
 def is_gated_mlp(model):

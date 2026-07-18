@@ -66,7 +66,7 @@ def main():
     if args.model:
         model_list = [args.model]
     else:
-        model_list = ["lr", "svr", "ann", "cnn_1d_scirep", "cnn_1d_4ha", "cnn_1d_generic", "gated_mlp", "gated_mlp_v2", "transformer"]
+        model_list = ["transformer"]
 
     trainer = Trainer(conf=copy.deepcopy(base_conf), model_builder=create_model)
     run_models(trainer, base_conf, model_list, args)

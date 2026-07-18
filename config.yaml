@@ -20,6 +20,9 @@ data_val_path: 'data/split/val'
 data_test_path: 'data/split/test'
 data_patch_path: 'patches'
 
+feature_cache_root: 'data/features'
+force_recompute_features: false
+
 # =============================================================================
 # Model Configuration
 # =============================================================================

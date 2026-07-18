@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from data.dataset import PatchDataset, PatchFeatureDataset
+from src.data.dataset import PatchDataset, PatchFeatureDataset
 from src.model.feature.feature_extractor import FeatureExtractor
 
 

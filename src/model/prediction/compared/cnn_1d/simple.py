@@ -1,9 +1,9 @@
-# Implementation of proposed generic 1d CNN
+# Implementation of proposed simple 1d CNN
 import torch
 import torch.nn as nn
 
 
-class CNN1DGeneric(nn.Module):
+class CNN1DSimple(nn.Module):
     def __init__(self, output_dim=1, dropout=0.3):
         super().__init__()
 

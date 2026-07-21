@@ -11,7 +11,7 @@ from src.model.factory import create_model
 from src.model.feature.feature_extractor import FeatureExtractor
 
 
-TARGET_MODELS = ["cnn_1d_4ha", "cnn_1d_generic", "transformer"]
+TARGET_MODELS = ["cnn_1d_4ha", "cnn_1d_simple", "transformer"]
 
 
 def _sync_if_cuda(device):
@@ -192,16 +192,16 @@ def run_all_single_image_benchmarks(conf):
     height_tensor = to_tensor(height_np).unsqueeze(0).to(device)
     normal_tensor = to_tensor(normal_np).unsqueeze(0).to(device)
 
-    model_generic = _build_model("cnn_1d_generic", conf, input_dim=None, device=device)
-    results["cnn_1d_generic"] = _time_end_to_end_model(
-        model=model_generic,
+    model_simple = _build_model("cnn_1d_simple", conf, input_dim=None, device=device)
+    results["cnn_1d_simple"] = _time_end_to_end_model(
+        model=model_simple,
         texture_tensor=texture_tensor,
         height_tensor=height_tensor,
         normal_tensor=normal_tensor,
         num_runs=num_runs,
         warmup=warmup,
         device=device,
-        desc="cnn_1d_generic",
+        desc="cnn_1d_simple",
     )
 
     model_transformer = _build_model("transformer", conf, input_dim=None, device=device)
@@ -231,8 +231,8 @@ def print_results(results):
     print(f"Model forward             : {r['forward_ms']:.4f} ms")
     print(f"Total                     : {r['total_ms']:.4f} ms")
 
-    r = results["cnn_1d_generic"]
-    print("\n[cnn_1d_generic]")
+    r = results["cnn_1d_simple"]
+    print("\n[cnn_1d_simple]")
     print(f"Model forward             : {r['forward_ms']:.4f} ms")
 
     r = results["transformer"]

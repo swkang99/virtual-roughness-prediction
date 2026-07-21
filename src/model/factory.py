@@ -1,6 +1,6 @@
 from sklearn import linear_model
 from sklearn.svm import SVR
-from src.model.prediction.compared.cnn_1d.wassem import CNN1D4HA
+from src.model.prediction.compared.cnn_1d.wassem import CNN1DWassem
 from src.model.prediction.compared.cnn_1d.scirep import CNN1DScirep
 from src.model.prediction.compared.ann import ANN
 from src.model.prediction.compared.cnn_1d.simple import CNN1DSimple
@@ -13,9 +13,9 @@ MODEL_REGISTRY = {
     "svr"           : lambda input_dim, device: SVR(),
     "ann"           : lambda input_dim, device: ANN(input_dim=input_dim).to(device),
     "cnn_1d_scirep" : lambda input_dim, device: CNN1DScirep(feature_dim=input_dim).to(device),
-    "cnn_1d_4ha"    : lambda input_dim, device: CNN1D4HA(input_dim=input_dim).to(device),
+    "cnn_1d_wassem" : lambda input_dim, device: CNN1DWassem(input_dim=input_dim).to(device),
     "transformer"   : lambda input_dim, device: TransformerRegressor().to(device),
-    "cnn_1d_generic": lambda input_dim, device: CNN1DSimple().to(device),
+    "cnn_1d_simple" : lambda input_dim, device: CNN1DSimple().to(device),
     "gated_mlp"     : lambda input_dim, device: GatedFusionRegressor(input_dim=input_dim).to(device),
     "gated_mlp_v2"  : lambda input_dim, device: GatedFusionRegressorV2(input_dim=input_dim).to(device),
 }

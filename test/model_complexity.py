@@ -8,7 +8,7 @@ MODEL_RECOMMENDED_INPUTS = {
     "svr": {"input_dim": 3955, "input_res": None},
     "ann": {"input_dim": 3955, "input_res": (1, 3955)},
     "cnn_1d_scirep": {"input_dim": 3955, "input_res": (1, 3955)},
-    "cnn_1d_4ha": {"input_dim": 3955, "input_res": (1, 3955)},
+    "cnn_1d_waseem": {"input_dim": 3955, "input_res": (1, 3955)},
     "cnn_1d_simple": {
         "input_dim": None,
         "input_res": ((1, 256, 256), (1, 256, 256), (3, 256, 256)),

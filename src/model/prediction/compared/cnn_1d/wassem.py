@@ -9,9 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class CNN1D4HA(nn.Module):
+class CNN1DWassem(nn.Module):
     def __init__(self, input_dim):
-        super(CNN1D4HA, self).__init__()
+        super(CNN1DWassem, self).__init__()
 
         seq_len_after_pools = max(1, input_dim // 4)
         

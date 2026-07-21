@@ -24,8 +24,8 @@ def is_gated_mlp(model):
 def is_end_to_end(model):
     module_name = model.__class__.__module__
     is_transformer = module_name.startswith('src.model.prediction.proposed.transformer')
-    is_cnn_1d_generic = module_name.startswith('src.model.prediction.compared.cnn_1d.generic')
-    return is_transformer or is_cnn_1d_generic
+    is_cnn_1d_simple = module_name.startswith('src.model.prediction.compared.cnn_1d.simple')
+    return is_transformer or is_cnn_1d_simple
 
 
 def is_torch_model(model):
@@ -415,7 +415,7 @@ class Trainer:
         if input_dim is None:
             return None
 
-        if model_name in {'ann', 'lr', 'svr', 'cnn_1d_scirep', 'cnn_1d_4ha', 'cnn_1d_generic'}:
+        if model_name in {'ann', 'lr', 'svr', 'cnn_1d_scirep', 'cnn_1d_wassem', 'cnn_1d_simple'}:
             if isinstance(input_dim, dict):
                 if 'texture_dim' in input_dim:
                     return input_dim['texture_dim']

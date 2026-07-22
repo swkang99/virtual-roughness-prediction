@@ -16,21 +16,21 @@ def gray_level_co_occurrence_matrix(img):
     elif img.ndim != 2:
         raise ValueError(f"Unsupported image shape for GLCM: {img.shape}")
 
-    # 0–7 범위로 양자화 (8단계)
-    img_q = (img // 32).astype(np.uint8)  # 256 → 8단계 (0~7)
+    # Quantization in the range of 0–7 (8 levels)
+    img_q = (img // 32).astype(np.uint8)  # 256 → Level 8 (0–7)
     img_q = np.clip(img_q, 0, 7)  # range 0~7
 
-    # GLCM 계산 (8×8 출력)
+    # GLCM Calculation (8×8 Output)
     glcm = graycomatrix(
         img_q,
         distances=[1],
-        angles=[0],           # 원하면 [0, np.pi/4, np.pi/2, 3*np.pi/4]
-        levels=8,             # 8단계 → 8×8 매트릭스
+        angles=[0],           # If desired, [0, np.pi/4, np.pi/2, 3*np.pi/4]
+        levels=8,             # Level 8 → 8×8 Matrix
         symmetric=True,
         normed=True
     )
 
-    # shape = (8, 8, 1, 1) 이므로, 2D로 줄이기
+    # Since shape = (8, 8, 1, 1), reduce it to 2D
     glcm_2d = glcm[:, :, 0, 0]
 
     # print("GLCM shape:", glcm_2d.shape)  # (8, 8)

@@ -1,7 +1,7 @@
-from tqdm import tqdm
 import numpy as np
 import torch
 from PIL import Image
+from tqdm import tqdm
 from torchvision import transforms, models
 from src.model.feature.glcm import gray_level_co_occurrence_matrix
 from src.model.feature.lbp import extract_lbp_feature

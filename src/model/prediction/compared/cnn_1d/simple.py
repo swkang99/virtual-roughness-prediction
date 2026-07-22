@@ -1,9 +1,9 @@
-# Implementation of proposed generic 1d CNN
+# Implementation of proposed simple 1d CNN
 import torch
 import torch.nn as nn
 
 
-class CNN1DGeneric(nn.Module):
+class CNN1DSimple(nn.Module):
     def __init__(self, output_dim=1, dropout=0.3):
         super().__init__()
 
@@ -41,7 +41,7 @@ class CNN1DGeneric(nn.Module):
                 x = x.unsqueeze(1)   # legacy support: (B, L) -> (B, 1, L)
 
             elif x.ndim == 3:
-                # (B, H, W) -> (B, 1, H, W) 로 해석
+                # (B, H, W) -> (B, 1, H, W)
                 x = x.unsqueeze(1)
 
             elif x.ndim == 5 and x.shape[1] == 1:

@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class GatedFusionRegressor(nn.Module):
     """
-    texture, height, normal 모달리티별 gated fusion
+    gated fusion by modality (texture, height, normal)
     """
     def __init__(self, input_dim, fusion_dim=128, output_dim=1):
         super().__init__()
@@ -14,17 +14,15 @@ class GatedFusionRegressor(nn.Module):
         normal_dim = input_dim['normal_dim']
         self.fusion_dim = fusion_dim
 
-        # 각 모달리티 projection
         self.texture_proj = nn.Linear(texture_dim, fusion_dim)
         self.height_proj = nn.Linear(height_dim, fusion_dim)
         self.normal_proj = nn.Linear(normal_dim, fusion_dim)
         
-        # Gate network (모달리티 중요도 학습)
         self.gate_network = nn.Sequential(
             nn.Linear(fusion_dim * 3, fusion_dim * 3),
             nn.ReLU(),
             nn.Linear(fusion_dim * 3, fusion_dim * 3),
-            nn.Sigmoid()  # 0-1 범위 gate
+            nn.Sigmoid()  # 0-1 range
         )
         
         # Fusion MLP
@@ -38,7 +36,6 @@ class GatedFusionRegressor(nn.Module):
         )
         
     def forward(self, texture_feat, height_feat, normal_feat):
-        # 각 모달리티 projection
         t = self.texture_proj(texture_feat)
         h = self.height_proj(height_feat)
         n = self.normal_proj(normal_feat)
@@ -46,10 +43,8 @@ class GatedFusionRegressor(nn.Module):
         # Concat for gate
         concat = torch.cat([t, h, n], dim=1)  # (batch, fusion_dim*3)
         
-        # Gate 계산
         gates = self.gate_network(concat)  # (batch, fusion_dim*3)
         
-        # Gate 분해
         gate_t = gates[:, :self.fusion_dim]
         gate_h = gates[:, self.fusion_dim:2*self.fusion_dim]
         gate_n = gates[:, 2*self.fusion_dim:]
@@ -59,7 +54,6 @@ class GatedFusionRegressor(nn.Module):
         h_gated = h * gate_h
         n_gated = n * gate_n
         
-        # Concat fused features
         fused = torch.cat([t_gated, h_gated, n_gated], dim=1)
         
         # Regression output

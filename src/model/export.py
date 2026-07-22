@@ -7,17 +7,17 @@ import torch
 
 
 CHECKPOINT_PATHS = {
-    "cnn_1d_generic": Path("experiments/checkpoints/patch_roughness_cnn_1d_generic_300epoch/best.pt"),
+    "cnn_1d_simple": Path("experiments/checkpoints/patch_roughness_cnn_1d_simple_300epoch/best.pt"),
     "transformer": Path("experiments/checkpoints/patch_roughness_transformer_300epoch/best.pt"),
 }
 
 EXPORT_PATHS = {
-    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic/cnn_1d_generic.onnx"),
+    "cnn_1d_simple": Path("output/exports/onnx/cnn_1d_simple/cnn_1d_simple.onnx"),
     "transformer": Path("output/exports/onnx/transformer/transformer.onnx"),
 }
 
 META_PATHS = {
-    "cnn_1d_generic": Path("output/exports/onnx/cnn_1d_generic/cnn_1d_generic_meta.json"),
+    "cnn_1d_simple": Path("output/exports/onnx/cnn_1d_simple/cnn_1d_simple_meta.json"),
     "transformer": Path("output/exports/onnx/transformer/transformer_meta.json"),
 }
 
@@ -84,7 +84,6 @@ def save_meta(meta_path: Path, model_name: str, y_min: float, y_max: float):
         "normalization": {
             "target_min": y_min,
             "target_max": y_max,
-            "note": "dummy values for now; replace with actual train-set y_min/y_max later"
         },
         "onnx_opset": 15
     }
@@ -148,7 +147,7 @@ def main():
         "--model",
         type=str,
         required=True,
-        choices=["cnn_1d_generic", "transformer"],
+        choices=["cnn_1d_simple", "transformer"],
         help="Model name to export"
     )
     parser.add_argument(

@@ -1,8 +1,8 @@
 import numpy as np
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
 
 class PatchDataset(Dataset): 
     def __init__(self, df):

@@ -1,20 +1,19 @@
 import numpy as np
 from pathlib import Path
-
 from src.data.dataset import PatchDataset, PatchFeatureDataset
 from src.model.feature.feature_extractor import FeatureExtractor
 
 
 MODEL_DATASET_TYPE = {
-    "lr": "feature",
-    "svr": "feature",
-    "ann": "feature",
+    "lr"           : "feature",
+    "svr"          : "feature",
+    "ann"          : "feature",
     "cnn_1d_scirep": "feature",
-    "cnn_1d_4ha": "feature",
-    "cnn_1d_generic": "maps",
-    "transformer": "maps",
-    "gated_mlp": "feature",
-    "gated_mlp_v2": "feature",
+    "cnn_1d_wassem": "feature",
+    "cnn_1d_simple": "maps",
+    "transformer"  : "maps",
+    "gated_mlp"    : "feature",
+    "gated_mlp_v2" : "feature",
 }
 
 

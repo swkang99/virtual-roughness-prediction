@@ -32,8 +32,8 @@ force_recompute_features: false
 #   2. svr            : Support Vector Regressor
 #   3. ann            : Artificial Neural Network (Simple DNN)
 #   4. cnn_1d_scirep  : 1D-CNN (Taye et al.)
-#   5. cnn_1d_4ha     : 1D-CNN (Hassan et al.)
-#   6. cnn_1d_generic : Simple 1D-CNN for comparing with proposed model
+#   5. cnn_1d_wassem  : 1D-CNN (Hassan et al.)
+#   6. cnn_1d_simple  : Simple 1D-CNN for comparing with proposed model
 #   7. transformer    : Proposed Transformer Regressor 
 #   8. gated_mlp      : Proposed Gated Fusion MLP
 model: transformer

@@ -33,14 +33,14 @@ def is_torch_model(model):
 
 def prepare_batch_by_model(batch, model, device):
     """
-    PatchDataset 기준:
+    PatchDataset :
         batch = (texture, height, normal, y)
 
-    PatchFeatureDataset 기준:
+    PatchFeatureDataset :
         batch = (x, y)
 
     gated_mlp / gated_mlp_v2:
-        feature x 하나를 texture_feat, height_feat, normal_feat 세 입력에 공통으로 사용
+        Use a single feature x as a common input for the three inputs: texture_feat, height_feat, and normal_feat
     """
 
     if is_gated_mlp(model):
@@ -81,38 +81,6 @@ def prepare_batch_by_model(batch, model, device):
         return x, y
 
     raise ValueError(f"Unsupported batch format with length {len(batch)}")
-
-'''
-def prepare_batch_by_model(batch, model, device):
-    """
-    SeparatedDataset 기준:
-        batch = (texture, height, normal, y)
-
-    FeatureDataset 기준:
-        batch = (x, y)
-    """
-    if is_gated_mlp(model) or is_end_to_end(model):
-        texture, height, normal, y = batch
-        texture = texture.to(device).float()
-        height = height.to(device).float()
-        normal = normal.to(device).float()
-        y = y.to(device).float()
-        return (texture, height, normal), y
-
-    if len(batch) == 4:
-        texture, height, normal, y = batch
-        x = torch.cat([texture, height, normal], dim=1).to(device).float()
-        y = y.to(device).float()
-        return x, y
-
-    if len(batch) == 2:
-        x, y = batch
-        x = x.to(device).float()
-        y = y.to(device).float()
-        return x, y
-
-    raise ValueError(f"Unsupported batch format with length {len(batch)}")
-'''
 
 
 def forward_by_model(model, inputs):

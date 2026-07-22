@@ -5,7 +5,6 @@ from pathlib import Path
 import csv
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
 import pandas as pd
 
 # Ensure repository root is on sys.path when running this script directly

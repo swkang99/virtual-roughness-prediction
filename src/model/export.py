@@ -84,7 +84,6 @@ def save_meta(meta_path: Path, model_name: str, y_min: float, y_max: float):
         "normalization": {
             "target_min": y_min,
             "target_max": y_max,
-            "note": "dummy values for now; replace with actual train-set y_min/y_max later"
         },
         "onnx_opset": 15
     }

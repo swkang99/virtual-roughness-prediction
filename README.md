@@ -1,11 +1,12 @@
-# virtual-tactile-property
+# Real-Time Roughness Prediction in Virtual Reality Using Transformer with Texture, Height, and Normal Maps
 
-A computer vision project for predicting **roughness** from texture-related visual inputs.
+Paper for predicting **roughness** from texture-related visual inputs.
+
+Venue: IEEE VR 2027
 
 ## Input and Output
 
-- **Texture image** -> Roughness
-- **Texture PBR maps** -> Roughness
+- **Texture image & PBR maps** -> Roughness
 
 ## Setup
 
@@ -43,11 +44,11 @@ The configuration values required to reproduce the model are stored in `config.y
 
 ## Reproduction
 
-### demo.ipynb
-The data can be downloaded from the supplementary materials of study [1] and should be placed in the data/original directory.
-
-Run `demo.ipynb` to reproduce the reported results.
-Execute all cells in order, or run the entire notebook at once.
+### Run bash script
+You can reproduce the training and testing using the following commands.
+```
+bash train_and_test_all_model_repeatedly.sh <ITERATION>
+```
 
 
 ## Reference

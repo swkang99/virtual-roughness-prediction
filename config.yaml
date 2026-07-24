@@ -23,6 +23,10 @@ data_patch_path: 'patches'
 feature_cache_root: 'data/features'
 force_recompute_features: false
 
+input_size: [256, 256]
+train_y_min: 13.4860 # normalization & denormalization
+train_y_max: 95.5010 # normalization & denormalization
+
 # =============================================================================
 # Model Configuration
 # =============================================================================

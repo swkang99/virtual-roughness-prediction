@@ -2,114 +2,122 @@ import torch
 import torch.nn as nn
 
 
-class ModalityAwareTokenEmbed(nn.Module):
+class LearnableSoftmaxFusionGates(nn.Module):
     """
-    Modality-aware token embedding with global learnable gates.
+    Learnable Softmax Fusion Gates (LSFG) for texture, height, and normal inputs.
 
     Input token channel order:
         texture_gray : 1 channel
         height_gray  : 1 channel
         normal_xyz   : 3 channels
 
-    Since each pixel is one token, each raw token has:
+    Since each pixel is one token, each raw pixel token has:
         [texture_gray, height_gray, normal_x, normal_y, normal_z]
 
     Input:
-        x: [B, num_windows, tokens_per_window, 5]
+        pixel_tokens: [B, num_windows, tokens_per_window, 5]
 
     Output:
-        x: [B, num_windows, tokens_per_window, D]
+        fused_pixel_tokens: [B, num_windows, tokens_per_window, D]
     """
 
     def __init__(
         self,
         embed_dim,
-        init_gate_logits=(1.0, 1.0, 1.0),
+        init_gates=(1.0, 1.0, 1.0),
     ):
         super().__init__()
 
         self.embed_dim = embed_dim
 
-        self.texture_embed = nn.Linear(1, embed_dim)
-        self.height_embed = nn.Linear(1, embed_dim)
-        self.normal_embed = nn.Linear(3, embed_dim)
+        # Independent linear projections for texture, height, and normal inputs.
+        self.texture_projection = nn.Linear(1, embed_dim)
+        self.height_projection = nn.Linear(1, embed_dim)
+        self.normal_projection = nn.Linear(3, embed_dim)
 
-        # Global learnable modality gates.
+        # Learnable gates for LSFG.
         # Gate order:
         #   [texture, height, normal]
-        self.gate_logits = nn.Parameter(
-            torch.tensor(init_gate_logits, dtype=torch.float32)
+        self.fusion_gates = nn.Parameter(
+            torch.tensor(init_gates, dtype=torch.float32)
         )
 
         self.norm = nn.LayerNorm(embed_dim)
-        self.act = nn.GELU()
+        self.activation = nn.GELU()
 
-        self.last_contrib = None
+        # Optional diagnostic values.
+        # These values are not used for training loss.
+        self.last_feature_contribution = None
 
-    def forward(self, x):
+    def forward(self, pixel_tokens):
         """
-        x:
+        pixel_tokens:
             [B, num_windows, tokens_per_window, 5]
 
         Channel order:
             texture_gray, height_gray, normal_x, normal_y, normal_z
         """
-        texture = x[..., 0:1]
-        height = x[..., 1:2]
-        normal = x[..., 2:5]
+        texture_token = pixel_tokens[..., 0:1]
+        height_token = pixel_tokens[..., 1:2]
+        normal_token = pixel_tokens[..., 2:5]
 
-        texture_feat = self.texture_embed(texture)
-        height_feat = self.height_embed(height)
-        normal_feat = self.normal_embed(normal)
+        texture_embed = self.texture_projection(texture_token)
+        height_embed = self.height_projection(height_token)
+        normal_embed = self.normal_projection(normal_token)
 
-        gates = torch.softmax(self.gate_logits, dim=0)
+        fusion_weights = torch.softmax(self.fusion_gates, dim=0)
 
-        # Optional diagnostic values.
-        # These values are not used for training loss.
         with torch.no_grad():
-            texture_contrib = (gates[0] * texture_feat).norm(dim=-1).mean()
-            height_contrib = (gates[1] * height_feat).norm(dim=-1).mean()
-            normal_contrib = (gates[2] * normal_feat).norm(dim=-1).mean()
+            texture_contribution = (
+                fusion_weights[0] * texture_embed
+            ).norm(dim=-1).mean()
+            height_contribution = (
+                fusion_weights[1] * height_embed
+            ).norm(dim=-1).mean()
+            normal_contribution = (
+                fusion_weights[2] * normal_embed
+            ).norm(dim=-1).mean()
 
-            self.last_contrib = {
-                "texture": texture_contrib.detach(),
-                "height": height_contrib.detach(),
-                "normal": normal_contrib.detach(),
+            self.last_feature_contribution = {
+                "texture": texture_contribution.detach(),
+                "height": height_contribution.detach(),
+                "normal": normal_contribution.detach(),
             }
 
-        x = (
-            gates[0] * texture_feat
-            + gates[1] * height_feat
-            + gates[2] * normal_feat
+        fused_pixel_tokens = (
+            fusion_weights[0] * texture_embed
+            + fusion_weights[1] * height_embed
+            + fusion_weights[2] * normal_embed
         )
 
-        x = self.norm(x)
-        x = self.act(x)
+        fused_pixel_tokens = self.norm(fused_pixel_tokens)
+        fused_pixel_tokens = self.activation(fused_pixel_tokens)
 
-        return x
+        return fused_pixel_tokens
 
-    def get_gates(self):
+    def get_fusion_weights(self):
         """
-        Return current modality gates as probabilities:
-            [texture_gate, height_gate, normal_gate]
+        Return current LSFG weights as probabilities:
+            [texture_weight, height_weight, normal_weight]
         """
-        return torch.softmax(self.gate_logits.detach(), dim=0)
+        return torch.softmax(self.fusion_gates.detach(), dim=0)
 
 
-class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
+class TransformerRegressor(nn.Module):
     """
-    Modality-aware local-global Transformer roughness regressor.
-
-    Texture gray + height gray + normal local-window Transformer-based roughness regressor
-    with local Transformer + global Window Transformer + modality-aware input gates.
+    Local-global transformer-based perceived roughness regressor with LSFG.
 
     Input:
-        height_img1, height_img2, height_img3:
-            Existing interface is kept for compatibility.
+        texture_image, height_map, normal_map
 
-        height_img1 is assumed to be texture image.
-        height_img2 is assumed to be height map.
-        height_img3 is assumed to be normal map.
+        texture_image:
+            1-channel grayscale texture map or 3-channel texture image
+
+        height_map:
+            1-channel height map or 3-channel height-like input
+
+        normal_map:
+            3-channel normal map
 
     Internal input feature:
         texture_gray : [B, 1, H, W]
@@ -119,26 +127,19 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
         concat -> [B, 5, H, W]
 
     Output:
-        roughness: [B, 1]
+        perceived_roughness: [B, 1]
 
     Main structure:
-        feature [B, 5, 256, 256]
-        -> 16x16 window partition
-        -> each window: 1x1 pixel tokens
-        -> modality-aware token embedding with learnable gates
-        -> 256 tokens per window
-        -> local self-attention
-        -> window pooling with mean + max + std
-        -> Linear 192 -> 64
-        -> [B, 256 windows, 64]
-        -> global window positional embedding
-        -> global Window Transformer
-        -> [B, 256 windows, 64]
-        -> reshape to [B, 64, 16, 16]
-        -> CNN head
-        -> global pooling with avg + max + std
+        input maps [B, 5, 256, 256]
+        -> Window partitioning
+        -> Learnable Softmax Fusion Gates (LSFG)
+        -> Local transformer
+        -> Local pooling with mean + max + standard deviation
+        -> Global transformer
+        -> CNN
+        -> Global pooling with mean + max + standard deviation
         -> MLP
-        -> [B, 1]
+        -> perceived roughness [B, 1]
     """
 
     def __init__(
@@ -154,7 +155,7 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
         window_size=16,
         global_depth=1,
         global_mlp_ratio=2.0,
-        init_gate_logits=(1.0, 1.0, 1.0),
+        init_gates=(1.0, 1.0, 1.0),
     ):
         super().__init__()
 
@@ -180,23 +181,23 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
                 f"but got embed_dim={embed_dim}, num_heads={num_heads}"
             )
 
-        self.grid_size = image_size // window_size
-        self.num_windows = self.grid_size ** 2
+        self.window_grid_size = image_size // window_size
+        self.num_windows = self.window_grid_size ** 2
 
         # Since each pixel inside a window is one token.
         # For window_size = 16:
         # tokens_per_window = 16 * 16 = 256
         self.tokens_per_window = window_size ** 2
 
-        # Modality-aware token embedding:
-        # texture, height, normal are embedded separately and combined by learnable gates.
-        self.token_embed = ModalityAwareTokenEmbed(
+        # Learnable Softmax Fusion Gates (LSFG):
+        # texture, height, and normal inputs are projected independently and fused with learnable softmax weights.
+        self.LSFG = LearnableSoftmaxFusionGates(
             embed_dim=embed_dim,
-            init_gate_logits=init_gate_logits,
+            init_gates=init_gates,
         )
 
-        # Positional embedding for 256 pixel tokens inside each local window.
-        self.local_pos_embed = nn.Parameter(
+        # Pixel-level positional embedding for 256 pixel tokens inside each local window.
+        self.pixel_level_pos_embed = nn.Parameter(
             torch.zeros(1, self.tokens_per_window, embed_dim)
         )
 
@@ -210,22 +211,21 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
             norm_first=False,
         )
 
-        self.transformer = nn.TransformerEncoder(
+        self.local_multi_heads_self_attention_transformer = nn.TransformerEncoder(
             local_encoder_layer,
             num_layers=depth,
         )
 
-        self.norm = nn.LayerNorm(embed_dim)
+        self.local_norm = nn.LayerNorm(embed_dim)
 
-        # Window token pooling:
-        # mean + max + std
+        # Window features projection:
         # [B*num_windows, 3D] -> [B*num_windows, D]
-        self.window_pool_proj = nn.Linear(embed_dim * 3, embed_dim)
+        self.window_features_projection = nn.Linear(embed_dim * 3, embed_dim)
 
-        # Positional embedding for 256 window descriptors.
+        # Window-level positional embedding for 256 window descriptors.
         # For image_size=256 and window_size=16:
         # num_windows = 16 * 16 = 256
-        self.global_window_pos_embed = nn.Parameter(
+        self.window_level_pos_embed = nn.Parameter(
             torch.zeros(1, self.num_windows, embed_dim)
         )
 
@@ -239,14 +239,24 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
             norm_first=False,
         )
 
-        self.global_transformer = nn.TransformerEncoder(
+        self.global_multi_heads_self_attention_transformer = nn.TransformerEncoder(
             global_encoder_layer,
             num_layers=global_depth,
         )
 
         self.global_norm = nn.LayerNorm(embed_dim)
 
-        self.cnn_head = nn.Sequential(
+        # CNN head for spatial refinement of the window-level feature map.
+        """
+            Apply the CNN head to refine the spatial feature map.
+        
+            Input:
+                spatial_feature_map: [B, D, 16, 16]
+        
+            Output:
+                spatial_feature_map: [B, D/2, 16, 16]
+        """
+        self.CNN = nn.Sequential(
             nn.Conv2d(embed_dim, embed_dim, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(embed_dim),
             nn.GELU(),
@@ -256,9 +266,17 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
             nn.GELU(),
         )
 
-        # Global pooling uses avg + max + std.
-        # CNN head output channel is embed_dim // 2.
-        self.regressor = nn.Sequential(
+        # MLP for final perceived roughness prediction.
+        """
+            Apply the MLP to predict perceived roughness.
+
+            Input:
+                global_feature: [B, 3 * D/2]
+
+            Output:
+                roughness: [B, 1]
+        """
+        self.MLP = nn.Sequential(
             nn.Flatten(),
             nn.Linear((embed_dim // 2) * 3, 128),
             nn.GELU(),
@@ -269,110 +287,122 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
         self._init_weights()
 
     def _init_weights(self):
-        nn.init.trunc_normal_(self.local_pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.global_window_pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.pixel_level_pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.window_level_pos_embed, std=0.02)
 
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
-            elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+            elif isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(
+                    module.weight,
+                    mode="fan_out",
+                    nonlinearity="relu",
+                )
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
-            elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
-                if m.weight is not None:
-                    nn.init.ones_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+            elif isinstance(module, (nn.BatchNorm2d, nn.LayerNorm)):
+                if module.weight is not None:
+                    nn.init.ones_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
-    def get_modality_gates(self):
+    def get_lsfg_weights(self):
         """
-        Return current modality gates as probabilities:
-            [texture_gate, height_gate, normal_gate]
+        Return current LSFG weights as probabilities:
+            [texture_weight, height_weight, normal_weight]
         """
-        return self.token_embed.get_gates()
+        return self.LSFG.get_fusion_weights()
 
-    def get_modality_contrib(self):
+    def get_lsfg_feature_contribution(self):
         """
-        Return last diagnostic contribution values.
+        Return last diagnostic feature contribution values.
 
         This is only for inspection/debugging.
         It is updated during forward().
         """
-        return self.token_embed.last_contrib
+        return self.LSFG.last_feature_contribution
 
-    def _to_grayscale_input(self, x):
+    def _to_grayscale_map(self, input_map):
         """
         Convert texture or height input to [B, 1, H, W].
 
         If input has 1 channel, keep it.
         If input has 3 channels, average it to grayscale.
         """
-        if x.dim() != 4:
-            raise ValueError(f"Expected 4D tensor [B, C, H, W], but got shape {x.shape}")
+        if input_map.dim() != 4:
+            raise ValueError(
+                f"Expected 4D tensor [B, C, H, W], "
+                f"but got shape {input_map.shape}"
+            )
 
-        x = x.float()
+        input_map = input_map.float()
 
-        if x.size(1) == 1:
-            return x
+        if input_map.size(1) == 1:
+            return input_map
 
-        if x.size(1) == 3:
-            return x.mean(dim=1, keepdim=True)
+        if input_map.size(1) == 3:
+            return input_map.mean(dim=1, keepdim=True)
 
-        raise ValueError(f"Expected channel size 1 or 3, but got {x.size(1)}")
+        raise ValueError(
+            f"Expected channel size 1 or 3, but got {input_map.size(1)}"
+        )
 
-    def _to_normal_input(self, x):
+    def _to_normal_map(self, input_map):
         """
         Convert normal input to [B, 3, H, W].
-
-        Assumption:
-            input normal map is already in [0, 1].
 
         Important:
             If the input has 3 channels, they are preserved.
             Normal x/y/z channels are not averaged.
         """
-        if x.dim() != 4:
-            raise ValueError(f"Expected 4D tensor [B, C, H, W], but got shape {x.shape}")
+        if input_map.dim() != 4:
+            raise ValueError(
+                f"Expected 4D tensor [B, C, H, W], "
+                f"but got shape {input_map.shape}"
+            )
 
-        x = x.float()
+        input_map = input_map.float()
 
-        if x.size(1) == 1:
-            # fallback for grayscale normal-like input
-            x = x.repeat(1, 3, 1, 1)
+        if input_map.size(1) == 1:
+            # Fallback for grayscale normal-like input.
+            input_map = input_map.repeat(1, 3, 1, 1)
 
-        if x.size(1) != 3:
-            raise ValueError(f"Expected normal channel size 1 or 3, but got {x.size(1)}")
+        if input_map.size(1) != 3:
+            raise ValueError(
+                f"Expected normal channel size 1 or 3, "
+                f"but got {input_map.size(1)}"
+            )
 
-        return x
+        return input_map
 
-    def _build_5ch_feature_input(self, texture_img, height_img, normal_img):
+    def build_input_maps(self, texture_image, height_map, normal_map):
         """
-        Build final input feature.
+        Build the 5-channel input maps.
 
-        texture_img:
+        texture_image:
             [B, 3, H, W] or [B, 1, H, W]
-            -> grayscale [B, 1, H, W]
+            -> grayscale texture map [B, 1, H, W]
 
-        height_img:
+        height_map:
             [B, 3, H, W] or [B, 1, H, W]
-            -> grayscale [B, 1, H, W]
+            -> grayscale height map [B, 1, H, W]
 
-        normal_img:
+        normal_map:
             [B, 3, H, W] or [B, 1, H, W]
-            -> normal [B, 3, H, W]
+            -> normal map [B, 3, H, W]
 
         Output:
-            [B, 5, H, W]
+            input_maps: [B, 5, H, W]
             = concat(texture_gray, height_gray, normal_xyz)
         """
-        texture_gray = self._to_grayscale_input(texture_img)
-        height_gray = self._to_grayscale_input(height_img)
-        normal = self._to_normal_input(normal_img)
+        texture_gray = self._to_grayscale_map(texture_image)
+        height_gray = self._to_grayscale_map(height_map)
+        normal = self._to_normal_map(normal_map)
 
         if (
             texture_gray.shape[-2:] != height_gray.shape[-2:]
@@ -385,116 +415,162 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
                 f"normal={tuple(normal.shape[-2:])}."
             )
 
-        x = torch.cat([texture_gray, height_gray, normal], dim=1)
+        input_maps = torch.cat([texture_gray, height_gray, normal], dim=1)
 
-        return x
+        return input_maps
 
-    def _partition_windows_to_tokens(self, x):
-        b, c, h, w = x.shape
+    def window_partitioning(self, input_maps):
+        """
+        Partition input maps into local windows.
 
-        if c != self.input_channels:
+        Input:
+            input_maps: [B, 5, 256, 256]
+
+        Output:
+            pixel_tokens: [B, num_windows, tokens_per_window, 5]
+            grid_h, grid_w
+        """
+        batch_size, channels, height, width = input_maps.shape
+
+        if channels != self.input_channels:
             raise ValueError(
-                f"Expected input with {self.input_channels} channels, but got {c}"
+                f"Expected input with {self.input_channels} channels, "
+                f"but got {channels}"
             )
 
-        if h != self.image_size or w != self.image_size:
+        if height != self.image_size or width != self.image_size:
             raise ValueError(
                 f"This model expects {self.image_size}x{self.image_size} inputs, "
-                f"but got H={h}, W={w}."
+                f"but got H={height}, W={width}."
             )
 
-        if h % self.window_size != 0 or w % self.window_size != 0:
+        if height % self.window_size != 0 or width % self.window_size != 0:
             raise ValueError(
                 f"Input H and W must be divisible by window_size={self.window_size}, "
-                f"but got H={h}, W={w}"
+                f"but got H={height}, W={width}"
             )
 
-        grid_h = h // self.window_size
-        grid_w = w // self.window_size
-
-        ws = self.window_size
+        grid_h = height // self.window_size
+        grid_w = width // self.window_size
+        window_size = self.window_size
 
         # [B, 5, H, W]
         # For 256x256 and window_size=16:
         # -> [B, 5, 16, 16, 16, 16]
-        x = x.reshape(b, c, grid_h, ws, grid_w, ws)
+        x = input_maps.reshape(
+            batch_size,
+            channels,
+            grid_h,
+            window_size,
+            grid_w,
+            window_size,
+        )
 
         # -> [B, grid_h, grid_w, 16, 16, 5]
-        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+        x = x.permute(
+            0, 2, 4, 3, 5, 1
+        ).contiguous()
 
         # -> [B, grid_h * grid_w, 256, 5]
-        x = x.reshape(
-            b,
+        pixel_tokens = x.reshape(
+            batch_size,
             grid_h * grid_w,
             self.tokens_per_window,
-            c,
+            channels,
         )
 
-        # Modality-aware token embedding:
-        # [B, grid_h * grid_w, 256, 5]
-        # -> [B, grid_h * grid_w, 256, D]
-        x = self.token_embed(x)
+        return pixel_tokens, grid_h, grid_w
 
-        # -> [B * grid_h * grid_w, 256, D]
-        x = x.reshape(
-            b * grid_h * grid_w,
-            self.tokens_per_window,
-            self.embed_dim,
-        )
-
-        return x, grid_h, grid_w
-
-    def _encode_local_windows(self, x):
-        b = x.size(0)
-
-        tokens, grid_h, grid_w = self._partition_windows_to_tokens(x)
-
-        # Local positional embedding.
-        # tokens: [B * num_windows, 256, D]
-        tokens = tokens + self.local_pos_embed
-
-        # Local intra-window self-attention.
-        # Each window is processed independently.
-        tokens = self.transformer(tokens)
-        tokens = self.norm(tokens)
-
-        # Window pooling:
-        # [B * num_windows, tokens_per_window, D]
-        # -> mean/max/std each [B * num_windows, D]
-        mean_feat = tokens.mean(dim=1)
-        max_feat = tokens.max(dim=1).values
-        std_feat = tokens.std(dim=1, unbiased=False)
-
-        # -> [B * num_windows, 3D]
-        window_features = torch.cat([mean_feat, max_feat, std_feat], dim=1)
-
-        # -> [B * num_windows, D]
-        window_features = self.window_pool_proj(window_features)
-
-        # -> [B, num_windows, D]
-        window_features = window_features.reshape(
-            b,
-            grid_h * grid_w,
-            self.embed_dim,
-        )
-
-        return window_features, grid_h, grid_w
-
-    def _encode_global_windows(self, window_features, grid_h, grid_w):
+    def learnable_softmax_fusion_gates(self, pixel_tokens):
         """
-        Encode relations among window-level descriptors using global Window Transformer.
+        Construct fused pixel tokens using Learnable Softmax Fusion Gates.
 
         Input:
-            window_features: [B, num_windows, D]
+            pixel_tokens: [B, num_windows, tokens_per_window, 5]
 
         Output:
-            feature_map: [B, D, grid_h, grid_w]
+            fused_pixel_tokens: [B * num_windows, tokens_per_window, D]
         """
-        b, num_windows, d = window_features.shape
+        batch_size, num_windows, _, _ = pixel_tokens.shape
 
-        if d != self.embed_dim:
+        # Learnable Softmax Fusion Gates:
+        # [B, num_windows, 256, 5]
+        # -> [B, num_windows, 256, D]
+        x = self.LSFG(pixel_tokens)
+
+        # -> [B * num_windows, 256, D]
+        fused_pixel_tokens = x.reshape(
+            batch_size * num_windows,
+            self.tokens_per_window,
+            self.embed_dim,
+        )
+
+        return fused_pixel_tokens
+
+    def local_transformer(self, fused_pixel_tokens):
+        """
+        Apply the local transformer to pixel tokens within each local window.
+
+        Input:
+            fused_pixel_tokens: [B * num_windows, tokens_per_window, D]
+
+        Output:
+            local_token_features: [B * num_windows, tokens_per_window, D]
+        """
+        # Add pixel-level positional embedding.
+        # fused_pixel_tokens: [B * num_windows, 256, D]
+        fused_pixel_tokens = fused_pixel_tokens + self.pixel_level_pos_embed
+
+        # Local self-attention:
+        # each local window is processed independently.
+        local_token_features = self.local_multi_heads_self_attention_transformer(
+            fused_pixel_tokens
+        )
+        local_token_features = self.local_norm(local_token_features)
+
+        return local_token_features
+
+    def local_pooling(self, local_token_features):
+        """
+        Apply local pooling along the token dimension.
+
+        Input:
+            local_token_features: [B * num_windows, tokens_per_window, D]
+
+        Output:
+            window_features: [B * num_windows, 3D]
+        """
+        # Local pooling along the token dimension:
+        # [B * num_windows, tokens_per_window, D]
+        # -> mean/max/std each [B * num_windows, D]
+        mean_feature = local_token_features.mean(dim=1)
+        max_feature = local_token_features.max(dim=1).values
+        std_feature = local_token_features.std(dim=1, unbiased=False)
+
+        # -> [B * num_windows, 3D]
+        window_features = torch.cat(
+            [mean_feature, max_feature, std_feature],
+            dim=1,
+        )
+
+        return window_features
+
+    def global_transformer(self, window_descriptors, grid_h, grid_w):
+        """
+        Apply the global transformer to model relationships among window descriptors.
+
+        Input:
+            window_descriptors: [B, num_windows, D]
+
+        Output:
+            spatial_feature_map: [B, D, grid_h, grid_w]
+        """
+        batch_size, num_windows, descriptor_dim = window_descriptors.shape
+
+        if descriptor_dim != self.embed_dim:
             raise ValueError(
-                f"Expected window feature dim {self.embed_dim}, but got {d}"
+                f"Expected window descriptor dim {self.embed_dim}, "
+                f"but got {descriptor_dim}"
             )
 
         if num_windows != self.num_windows:
@@ -507,69 +583,104 @@ class TransformerRegressor(nn.Module):  # Total trainable parameters ~= 181,092
         if num_windows != grid_h * grid_w:
             raise ValueError(
                 f"num_windows must equal grid_h * grid_w, "
-                f"but got num_windows={num_windows}, grid_h={grid_h}, grid_w={grid_w}"
+                f"but got num_windows={num_windows}, "
+                f"grid_h={grid_h}, grid_w={grid_w}"
             )
 
         # Add window-level positional embedding.
         # [B, 256, D] + [1, 256, D]
-        window_features = window_features + self.global_window_pos_embed
+        window_descriptors = window_descriptors + self.window_level_pos_embed
 
-        # Global inter-window self-attention.
-        # This models relations among the 256 window descriptors.
-        window_features = self.global_transformer(window_features)
-        window_features = self.global_norm(window_features)
+        # Global self-attention among the 256 window descriptors.
+        spatial_feature_map = self.global_multi_heads_self_attention_transformer(
+            window_descriptors
+        )
+        spatial_feature_map = self.global_norm(spatial_feature_map)
 
         # -> [B, D, grid_h, grid_w]
-        feature_map = window_features.transpose(1, 2).reshape(
-            b,
+        spatial_feature_map = spatial_feature_map.transpose(1, 2).reshape(
+            batch_size,
             self.embed_dim,
             grid_h,
             grid_w,
         )
 
-        return feature_map
+        return spatial_feature_map
 
-    def _global_pool_features(self, x):
+    def global_pooling(self, spatial_feature_map):
         """
-        Global pooling with avg + max + std.
+        Apply global pooling to the entire spatial feature map.
 
-        x:
-            [B, C, H, W]
+        Input:
+            spatial_feature_map: [B, C, H, W]
 
         Output:
-            [B, 3C]
+            global_feature: [B, 3C]
         """
-        avg_feat = x.mean(dim=(2, 3))
-        max_feat = x.amax(dim=(2, 3))
-        std_feat = x.std(dim=(2, 3), unbiased=False)
+        mean_feature = spatial_feature_map.mean(dim=(2, 3))
+        max_feature = spatial_feature_map.amax(dim=(2, 3))
+        std_feature = spatial_feature_map.std(dim=(2, 3), unbiased=False)
 
-        x = torch.cat([avg_feat, max_feat, std_feat], dim=1)
+        global_feature = torch.cat(
+            [mean_feature, max_feature, std_feature],
+            dim=1,
+        )
 
-        return x
+        return global_feature
 
     def forward(self, texture_image, height_map, normal_map):
-        x = self._build_5ch_feature_input(texture_image, height_map, normal_map)
+        input_maps = self.build_input_maps(texture_image, height_map, normal_map)
+        batch_size = input_maps.size(0)
 
-        # [B, 5, 256, 256]
-        # -> modality-aware token embedding
-        # -> local window descriptors [B, 256, D]
-        window_features, grid_h, grid_w = self._encode_local_windows(x)
+        # Window partitioning:
+        # [B, 5, 256, 256] -> pixel tokens [B, 256, 256, 5]
+        pixel_tokens, grid_h, grid_w = self.window_partitioning(input_maps)
 
-        # [B, 256, D]
-        # -> global window Transformer
-        # -> [B, D, 16, 16]
-        x = self._encode_global_windows(window_features, grid_h, grid_w)
+        # Learnable Softmax Fusion Gates:
+        # [B, 256, 256, 5] -> fused pixel tokens [B * 256, 256, D]
+        fused_pixel_tokens = self.learnable_softmax_fusion_gates(pixel_tokens)
 
+        # Local transformer:
+        # [B * 256, 256, D] -> local token features [B * 256, 256, D]
+        local_token_features = self.local_transformer(fused_pixel_tokens)
+
+        # Local pooling:
+        # [B * 256, 256, D] -> window features [B * 256, 3D]
+        window_features = self.local_pooling(local_token_features)
+
+        # [B * num_windows, 3D] -> [B * num_windows, D]
+        window_descriptors = self.window_features_projection(
+            window_features
+        )
+
+        # -> [B, num_windows, D]
+        window_descriptors = window_descriptors.reshape(
+            batch_size,
+            grid_h * grid_w,
+            self.embed_dim,
+        )
+
+        # Global transformer:
+        # [B, 256, D] -> spatial feature map [B, D, 16, 16]
+        spatial_feature_map = self.global_transformer(
+            window_descriptors,
+            grid_h,
+            grid_w,
+        )
+
+        # CNN:
         # [B, D, 16, 16] -> [B, D/2, 16, 16]
-        x = self.cnn_head(x)
+        x = self.CNN(spatial_feature_map)
 
+        # Global pooling:
         # [B, D/2, 16, 16] -> [B, 3 * D/2]
-        x = self._global_pool_features(x)
+        x = self.global_pooling(x)
 
+        # MLP:
         # [B, 3 * D/2] -> [B, 1]
-        out = self.regressor(x)
+        roughness = self.MLP(x)
 
         if self.bounded_output:
-            out = torch.sigmoid(out) * self.output_scale
+            roughness = torch.sigmoid(roughness) * self.output_scale
 
-        return out
+        return roughness

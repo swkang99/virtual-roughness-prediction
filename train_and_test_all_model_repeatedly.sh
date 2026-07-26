@@ -3,64 +3,65 @@
 set -Eeuo pipefail
 
 # ============================================================
-# 실행 인자 검사
-# 사용법: ./train_and_test_all_model_repeatedly.sh <반복 횟수>
-# 예시:   ./train_and_test_all_model_repeatedly.sh 10
+# Validate command-line arguments
+# Usage: ./train_and_test_all_model_repeatedly.sh <number of repetitions>
+# Example: ./train_and_test_all_model_repeatedly.sh 10
 # ============================================================
 
 
-if [[ $# -ne 1 ]]; then
-    echo "사용법: $0 <반복 횟수>"
-    echo "예시:   $0 10"
+# Use 1 as the default when no argument is provided
+if [[ $# -gt 1 ]]; then
+    echo "Usage: $0 [number of repetitions]"
+    echo "Example: $0 10"
     exit 1
 fi
 
-repeatCount="$1"
+repeatCount="${1:-1}"
 
-# 1 이상의 정수인지 검사
+# Check whether the value is an integer greater than or equal to 1
 if [[ ! "$repeatCount" =~ ^[1-9][0-9]*$ ]]; then
-    echo "[ERROR] 반복 횟수는 1 이상의 정수여야 합니다."
-    echo "입력값: ${repeatCount}"
+    echo "[ERROR] The number of repetitions must be an integer greater than or equal to 1."
+    echo "Input value: ${repeatCount}"
     exit 1
 fi
 
 
 # ============================================================
-# 기본 경로 및 실행 시작 시각 설정
+# Configure basic paths and the execution start time
 # ============================================================
 
 
-# 이 스크립트를 실행한 현재 디렉터리
+# Current directory from which this script is executed
 workDir="$(pwd)"
 
-# 스크립트 실행 시작 시각
+# Script execution start timestamp
 startTimestamp="$(date '+%F_%H-%M-%S')"
 
-# 전체 실행 시간 측정을 위한 시작 시간
+# Start time for measuring the total execution time
 scriptStartEpoch="$(date +%s)"
 scriptStartTime="$(date '+%F %T')"
 
-# 전체 터미널 출력을 저장할 로그 파일
+# Log file for storing all terminal output
 cmdLogFile_Dir="${workDir}/logs"
 cmdLogFile="${workDir}/logs/train_${startTimestamp}.log"
 
-# 이번 실행의 결과를 모을 디렉터리
+# Directory for collecting the results of this run
 resultsDir_0="${workDir}/results"
 resultsDir="${workDir}/results/results_${startTimestamp}"
 
-# experiment.py 실행 후 생성되는 디렉터리
+# Directory created after experiment.py is executed
 experimentsDir="${workDir}/experiments"
 
 
 # ============================================================
-# 터미널 출력 로깅 설정
+# Configure terminal output logging
 # ============================================================
 
 
 mkdir -p "$cmdLogFile_Dir"
 exec > >(stdbuf -oL -eL tee -a "$cmdLogFile") 2>&1
 
-# Python의 출력 버퍼링 방지
+# Disable Python output buffering
 export PYTHONUNBUFFERED=1
 
 
@@ -75,14 +76,14 @@ echo "============================================================"
 
 
 # ============================================================
-# 새로운 results_날짜시간 디렉터리 생성
+# Create a new results_<date_time> directory
 # ============================================================
 
 
 if [[ -e "$resultsDir" ]]; then
-    echo "[ERROR] 같은 이름의 결과 경로가 이미 존재합니다:"
+    echo "[ERROR] A results path with the same name already exists:"
     echo "        ${resultsDir}"
-    echo "1초 후 다시 실행하거나 기존 경로를 확인해 주세요."
+    echo "Please run the script again after one second or check the existing path."
     exit 1
 fi
 
@@ -94,31 +95,32 @@ echo "                 ${resultsDir}"
 
 
 # ============================================================
-# 이전 experiments 디렉터리 존재 여부 확인
+# Check whether a previous experiments directory exists
 # ============================================================
 
 
-# 이전 실행에서 생성된 experiments 디렉터리를 이번 실행의 결과로
-# 잘못 이동하는 것을 막기 위해 자동 삭제하지 않고 실행을 중단한다.
+# To prevent an experiments directory created by a previous run from being
+# incorrectly moved as part of this run, stop execution instead of deleting it automatically.
 if [[ -e "$experimentsDir" ]]; then
     echo
-    echo "[ERROR] 실험을 시작하기 전에 experiments 경로가 이미 존재합니다:"
+    echo "[ERROR] The experiments path already exists before starting the experiment:"
     echo "        ${experimentsDir}"
     echo
-    echo "기존 실험 결과일 수 있으므로 자동으로 삭제하지 않습니다."
-    echo "해당 경로를 직접 이동하거나 삭제한 후 다시 실행해 주세요."
+    echo "It may contain results from a previous experiment, so it will not be deleted automatically."
+    echo "Please manually move or delete the path, and then run the script again."
     exit 1
 fi
 
 
 # ============================================================
-# experiment.py 반복 실행
+# Repeatedly execute experiment.py
 # ============================================================
 
 
 for ((i = 1; i <= repeatCount; i++)); do
-    # 전체 반복 횟수의 자릿수에 따라 최소 두 자리로 표시
-    # 예: 1 -> 01, 10 -> 10, 100 -> 100
+    # Display the repetition number using at least two digits,
+    # depending on the number of digits in the total repetition count
+    # Example: 1 -> 01, 10 -> 10, 100 -> 100
     printf -v repeatNumber "%02d" "$i"
 
     destinationDir="${resultsDir}/experiments_repeat_${repeatNumber}"
@@ -130,15 +132,15 @@ for ((i = 1; i <= repeatCount; i++)); do
     echo "Command   : python -m test.experiment"
     echo "============================================================"
 
-    # 혹시 직전 반복에서 experiments 디렉터리가 남아 있는지 검사
+    # Check whether the experiments directory remains from the previous repetition
     if [[ -e "$experimentsDir" ]]; then
-        echo "[ERROR] 실험 실행 전에 experiments 경로가 이미 존재합니다:"
+        echo "[ERROR] The experiments path already exists before executing the experiment:"
         echo "        ${experimentsDir}"
-        echo "반복 실행을 중단합니다."
+        echo "Stopping the repeated experiment execution."
         exit 1
     fi
 
-    # 실험 실행
+    # Execute the experiment
     if python -m test.experiment; then
         echo
         echo "[Repeat ${repeatNumber}/${repeatCount}] Python process completed."
@@ -148,33 +150,33 @@ for ((i = 1; i <= repeatCount; i++)); do
         echo
         echo "[ERROR] Repeat ${repeatNumber}/${repeatCount} failed."
         echo "Exit code: ${exitCode}"
-        echo "이후 반복 실험은 실행하지 않습니다."
+        echo "No further experiment repetitions will be executed."
         echo
-        echo "현재까지 완료된 결과는 다음 경로에 보존되어 있습니다:"
+        echo "The results completed so far have been preserved in the following directory:"
         echo "${resultsDir}"
 
         exit "$exitCode"
     fi
 
-    # experiment.py가 experiments 디렉터리를 생성했는지 확인
+    # Check whether experiment.py created the experiments directory
     if [[ ! -d "$experimentsDir" ]]; then
         echo
-        echo "[ERROR] Python 명령은 정상 종료되었지만 experiments 디렉터리가 생성되지 않았습니다:"
+        echo "[ERROR] The Python command completed successfully, but the experiments directory was not created:"
         echo "        ${experimentsDir}"
-        echo "이후 반복 실험은 실행하지 않습니다."
+        echo "No further experiment repetitions will be executed."
         exit 1
     fi
 
-    # 동일한 이름의 이동 대상이 이미 존재하는지 확인
+    # Check whether a destination with the same name already exists
     if [[ -e "$destinationDir" ]]; then
         echo
-        echo "[ERROR] 이동할 대상 경로가 이미 존재합니다:"
+        echo "[ERROR] The destination path already exists:"
         echo "        ${destinationDir}"
-        echo "기존 결과를 보호하기 위해 실행을 중단합니다."
+        echo "Execution will be stopped to protect the existing results."
         exit 1
     fi
 
-    # experiments 디렉터리를 results_날짜시간 안으로 이동하면서 이름 변경
+    # Move the experiments directory into the results_<date_time> directory and rename it
     mv -- "$experimentsDir" "$destinationDir"
 
     echo "[Repeat ${repeatNumber}/${repeatCount}] Results moved:"
@@ -185,11 +187,11 @@ done
 
 
 # ============================================================
-# 전체 반복 완료
+# All repetitions completed
 # ============================================================
 
 
-# 전체 실행 종료 시간과 총 소요 시간 계산
+# Calculate the overall execution end time and total elapsed time
 scriptEndEpoch="$(date +%s)"
 scriptEndTime="$(date '+%F %T')"
 
@@ -201,13 +203,13 @@ elapsedMinutes=$(((elapsedSeconds % 3600) / 60))
 elapsedRemainingSeconds=$((elapsedSeconds % 60))
 
 if (( elapsedDays > 0 )); then
-    printf -v elapsedTime "%d일 %02d시간 %02d분 %02d초" \
+    printf -v elapsedTime "%d days %02d hours %02d minutes %02d seconds" \
         "$elapsedDays" \
         "$elapsedHours" \
         "$elapsedMinutes" \
         "$elapsedRemainingSeconds"
 else
-    printf -v elapsedTime "%02d시간 %02d분 %02d초" \
+    printf -v elapsedTime "%02d hours %02d minutes %02d seconds" \
         "$elapsedHours" \
         "$elapsedMinutes" \
         "$elapsedRemainingSeconds"

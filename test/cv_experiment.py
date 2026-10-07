@@ -231,7 +231,8 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max):
         model.train(); t0 = time.time(); run_loss = 0.0
         for batch in loader:
             inputs, y = prepare_batch_by_model(batch, model, device)
-            if args.aug and len(inputs) == 3:
+            # image augmentation only for image inputs (B,C,H,W); feature-vector models are left untouched
+            if args.aug and isinstance(inputs, tuple) and len(inputs) == 3 and inputs[0].dim() == 4:
                 inputs = dihedral_aug(*inputs)
             w = torch.ones(len(y), device=device)
             opt.zero_grad(set_to_none=True)
@@ -286,6 +287,7 @@ def main():
     ap.add_argument('--tag', default=None)
     ap.add_argument('--out', default='results_cv')
     ap.add_argument('--data_root', default=None, help='e.g. data  (if config paths differ)')
+    ap.add_argument('--feature_cache_root', default=None, help='override config feature_cache_root (feature-based models)')
     ap.add_argument('--max_patches', type=int, default=None, help='smoke test only')
     ap.add_argument('--max_folds', type=int, default=None, help='smoke test only')
     ap.add_argument('--verbose', action='store_true')
@@ -293,6 +295,8 @@ def main():
 
     conf = yaml.safe_load(open('config.yaml', encoding='utf-8'))
     conf['model'] = args.model
+    if args.feature_cache_root:
+        conf['feature_cache_root'] = args.feature_cache_root
     args.epochs = args.epochs or int(conf.get('epochs', 300))
     args.batch_size = args.batch_size or int(conf.get('batch_size', 56))
     args.lr = args.lr or float(conf.get('learning_rate', 1e-3))

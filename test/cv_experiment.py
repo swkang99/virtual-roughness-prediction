@@ -133,13 +133,15 @@ def ccc_loss(pred, y):
 
 
 def make_criterion(name):
-    mse, huber = nn.MSELoss(reduction='none'), nn.HuberLoss(reduction='none', delta=0.1)
+    mse, huber, l1 = nn.MSELoss(reduction='none'), nn.HuberLoss(reduction='none', delta=0.1), nn.L1Loss(reduction='none')
 
     def crit(pred, y, w):
         if name in ('mse', 'mse_ccc'):
             base = (mse(pred, y).view(len(y), -1).mean(1) * w).sum() / w.sum()
         elif name == 'huber':
             base = (huber(pred, y).view(len(y), -1).mean(1) * w).sum() / w.sum()
+        elif name == 'l1':                      # targets the conditional median -> matches the MAE metric
+            base = (l1(pred, y).view(len(y), -1).mean(1) * w).sum() / w.sum()
         elif name == 'ccc':
             return ccc_loss(pred.view(-1), y.view(-1))
         if name == 'mse_ccc':
@@ -198,7 +200,9 @@ def metrics(pred, gt, tex):
     d = pd.DataFrame({'p': pred, 'g': gt, 't': tex})
     t = d.groupby('t').mean()
     slope = np.polyfit(t.g, t.p, 1)[0] if len(t) > 1 else np.nan
-    r = np.corrcoef(t.g, t.p)[0, 1] if len(t) > 2 else np.nan
+    # constant predictions (e.g. a collapsed model in early epochs) have zero variance:
+    # Pearson r is undefined there, so return NaN explicitly instead of letting numpy warn
+    r = np.corrcoef(t.g, t.p)[0, 1] if len(t) > 2 and t.p.std() > 1e-12 else np.nan
     ccc = 2 * np.cov(t.g, t.p, bias=True)[0, 1] / (t.g.var(ddof=0) + t.p.var(ddof=0) + (t.g.mean() - t.p.mean()) ** 2)
     return dict(patch_mae=float(np.abs(d.p - d.g).mean()),
                 patch_rmse=float(np.sqrt(((d.p - d.g) ** 2).mean())),
@@ -277,7 +281,7 @@ def main():
     ap.add_argument('--lr', type=float, default=None)
     ap.add_argument('--weight_decay', type=float, default=None)
     ap.add_argument('--patience', type=int, default=0, help='0 = no early stopping (paper setting)')
-    ap.add_argument('--loss', choices=['mse', 'huber', 'ccc', 'mse_ccc'], default='mse')
+    ap.add_argument('--loss', choices=['mse', 'huber', 'l1', 'ccc', 'mse_ccc'], default='mse')
     ap.add_argument('--lds', action='store_true')
     ap.add_argument('--select', choices=['val_rmse', 'val_tex_mae', 'val_ccc'], default='val_rmse')
     ap.add_argument('--aug', action='store_true')

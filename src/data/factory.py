@@ -60,9 +60,16 @@ def _get_feature_cache_root(conf):
     return Path(__file__).resolve().parent / "features"
 
 
+def _get_feature_mode(conf):
+    return (conf or {}).get("feature_mode", "legacy")
+
+
 def _get_feature_cache_path(conf, full_df):
     split_name = _infer_split_name(full_df)
     cache_root = _get_feature_cache_root(conf)
+    mode = _get_feature_mode(conf)
+    if mode != "legacy":                      # keep the existing legacy caches untouched
+        cache_root = cache_root / mode
     return cache_root / split_name / "features.npz"
 
 
@@ -196,7 +203,7 @@ def build_feature_base_dataset(full_df, device, conf=None):
             input_dim = full_features.shape[1]
             return PatchFeatureDataset(full_features, full_targets), full_targets, input_dim
 
-    feature_extractor = FeatureExtractor(device)
+    feature_extractor = FeatureExtractor(device, mode=_get_feature_mode(conf))
     full_features, full_targets = feature_extractor.precompute_features_and_targets(full_df)
 
     input_dim = full_features.shape[1]

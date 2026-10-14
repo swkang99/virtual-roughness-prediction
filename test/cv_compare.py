@@ -1,8 +1,8 @@
 """
 Compare several models run with test/cv_experiment.py on identical folds.
 
-    python -m test.cv_compare results_cv --protocol cv    --ref transformer
-    python -m test.cv_compare results_cv --protocol fixed --ref transformer
+    python -m test.cv_compare output/results_cv --protocol cv    --ref transformer
+    python -m test.cv_compare output/results_cv --protocol fixed --ref transformer
 
 Because make_folds() depends only on (labels, seed), every model sees exactly the
 same train/val/test textures in repeat r -> paired comparisons are valid.
@@ -26,15 +26,15 @@ from scipy import stats
 from test.cv_aggregate import tex_metrics
 
 DISPLAY = {'lr': 'LR', 'svr': 'SVR', 'ann': 'ANN', 'cnn_1d_simple': 'Simple 1D-CNN',
-           'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': '1D-CNN (Taye)',
+           'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': 'Scirep 1D-CNN',
            'transformer': 'Transformer (ours)', 'gated_mlp': 'Gated MLP', 'gated_mlp_v2': 'Gated MLP v2'}
-ORDER = ['lr', 'svr', 'ann', 'cnn_1d_wassem', 'cnn_1d_simple', 'transformer']
+ORDER = ['lr', 'svr', 'ann', 'cnn_1d_wassem', 'cnn_1d_scirep', 'cnn_1d_simple', 'transformer']
 METRICS = [('patch_MAE', 'MAE (patch)', 'min'), ('patch_RMSE', 'RMSE (patch)', 'min'),
            ('tex_MAE', 'MAE (texture)', 'min'), ('slope', 'Slope', 'one'),
            ('r', 'Pearson r', 'max'), ('CCC', 'CCC', 'max')]
 
 
-def load_runs(root, protocol, only_paper_setting=True, dirs=None):
+def load_runs(root, protocol, only_paper_setting=True, dirs=None, feature_mode='original'):
     runs = {}
     for d in sorted(Path(root).iterdir()):
         if dirs is not None and d.name not in dirs:
@@ -45,8 +45,9 @@ def load_runs(root, protocol, only_paper_setting=True, dirs=None):
         args = json.load(open(a))
         if args['protocol'] != protocol:
             continue
+        fm = args.get('feature_mode') or ('legacy' if args['model'] not in ('transformer', 'cnn_1d_simple') else None)
         paper = (args['loss'] == 'mse' and not args['lds'] and not args['aug']
-                 and not args['cosine'] and args['select'] == 'val_rmse')
+                 and not args['cosine'] and args['select'] == 'val_rmse' and fm in (None, feature_mode))
         key = args['model'] if paper else f"{args['model']}:{d.name}"
         if only_paper_setting and not paper and dirs is None:
             continue
@@ -69,15 +70,16 @@ def median_baseline(run):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('root', nargs='?', default='results_cv')
+    ap.add_argument('root', nargs='?', default='output/results_cv')
     ap.add_argument('--protocol', choices=['cv', 'fixed'], default='cv')
     ap.add_argument('--ref', default='transformer')
     ap.add_argument('--include_ablations', action='store_true', help='also list non-paper settings')
     ap.add_argument('--runs', nargs='+', default=None, help='explicit list of run folder names to compare')
     ap.add_argument('--name', default=None, help='output folder name inside root')
+    ap.add_argument('--feature_mode', default='original', help='which feature-extraction mode counts as the baseline setting')
     a = ap.parse_args()
 
-    runs = load_runs(a.root, a.protocol, only_paper_setting=not a.include_ablations, dirs=a.runs)
+    runs = load_runs(a.root, a.protocol, only_paper_setting=not a.include_ablations, dirs=a.runs, feature_mode=a.feature_mode)
     if not runs:
         raise SystemExit(f'no {a.protocol} runs found in {a.root}')
     # --ref may be a model name ('transformer') or a run-folder name

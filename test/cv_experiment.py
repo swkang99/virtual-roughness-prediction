@@ -49,6 +49,36 @@ from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
 from src.model.factory import create_model
 from src.trainer import prepare_batch_by_model, forward_by_model, is_torch_model
+from src.model.feature.feature_extractor import GLCM_SLICE
+
+
+class ColumnMinMax(torch.utils.data.Dataset):
+    """Per-feature min-max scaling of selected columns with statistics of the training fold
+    (Hassan et al. scale GLCM features to [0, 1]; fitting on the training fold avoids test leakage)."""
+    def __init__(self, subset, cols, lo, hi):
+        self.subset, self.cols = subset, cols
+        self.lo = torch.as_tensor(lo, dtype=torch.float32)
+        self.rng = torch.as_tensor(np.where(hi - lo > 0, hi - lo, 1.0), dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, i):
+        x, y = self.subset[i]
+        x = x.clone(); x[self.cols] = (x[self.cols] - self.lo) / self.rng
+        return x, y
+
+
+# Target scale used by the original study (Hassan et al., authors' code) for the re-implemented baselines.
+# (y - lo) / (hi - lo): raw 0-100 ratings for LR / SVR / ANN (matters for SVR: epsilon = 0.1 is defined on this
+# scale), ratings / 100 for the Hassan 1D-CNN (sigmoid output). Applied to the paper setting (MSE) only; the
+# training recipe (CCC loss, LDS) is defined on train-fold min-max targets, as for all other models.
+ORIGINAL_TARGET_SCALE = {'lr': (0.0, 1.0), 'svr': (0.0, 1.0), 'ann': (0.0, 1.0), 'cnn_1d_wassem': (0.0, 100.0)}
+
+
+def base_features(base):
+    """stacked feature matrix of a ConcatDataset of PatchFeatureDataset (feature-based models)"""
+    return torch.cat([d.features for d in base.datasets]).numpy()
 
 
 # ----------------------------------------------------------------------------- utils
@@ -152,7 +182,7 @@ def make_criterion(name):
 
 def lds_weights(y_norm, bins=50, sigma=2.0):
     """Label Distribution Smoothing (Yang et al., ICML 2021): w ∝ 1/sqrt(smoothed density)."""
-    hist, edges = np.histogram(y_norm, bins=bins, range=(0, 1))
+    hist, edges = np.histogram(y_norm, bins=bins, range=(float(np.min(y_norm)), float(np.max(y_norm))))
     k = np.arange(-3 * int(sigma), 3 * int(sigma) + 1)
     kern = np.exp(-k ** 2 / (2 * sigma ** 2)); kern /= kern.sum()
     smooth = np.convolve(hist, kern, mode='same')
@@ -289,9 +319,13 @@ def main():
     ap.add_argument('--warmup', type=int, default=5)
     ap.add_argument('--amp', action='store_true', help='mixed precision on CUDA')
     ap.add_argument('--tag', default=None)
-    ap.add_argument('--out', default='results_cv')
+    ap.add_argument('--out', default='output/results_cv', help='output/ is git-ignored')
     ap.add_argument('--data_root', default=None, help='e.g. data  (if config paths differ)')
     ap.add_argument('--feature_cache_root', default=None, help='override config feature_cache_root (feature-based models)')
+    ap.add_argument('--feature_mode', choices=['legacy', 'original'], default=None,
+                    help='feature-based models: legacy (results so far) or original (Hassan et al. re-implementation); '
+                         'default = config feature_mode or original')
+    ap.add_argument('--print_tag', action='store_true', help='print the run-folder name for these arguments and exit')
     ap.add_argument('--max_patches', type=int, default=None, help='smoke test only')
     ap.add_argument('--max_folds', type=int, default=None, help='smoke test only')
     ap.add_argument('--verbose', action='store_true')
@@ -301,6 +335,12 @@ def main():
     conf['model'] = args.model
     if args.feature_cache_root:
         conf['feature_cache_root'] = args.feature_cache_root
+    if args.feature_mode:
+        conf['feature_mode'] = args.feature_mode
+    is_feature_model = MODEL_DATASET_TYPE.get(args.model) == 'feature'
+    args.feature_mode = conf.get('feature_mode', 'original') if is_feature_model else None
+    if is_feature_model:
+        conf['feature_mode'] = args.feature_mode
     args.epochs = args.epochs or int(conf.get('epochs', 300))
     args.batch_size = args.batch_size or int(conf.get('batch_size', 56))
     args.lr = args.lr or float(conf.get('learning_rate', 1e-3))
@@ -309,14 +349,19 @@ def main():
 
     tag = args.tag or (f'{args.model}_{args.protocol}' + (f'{args.k}' if args.protocol == 'cv' else '') +
                        f'_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
-                       ('_cos' if args.cosine else '') + f'_{args.select}')
+                       ('_cos' if args.cosine else '') + f'_{args.select}' +
+                       (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else ''))
+    if args.print_tag:
+        print(tag); return
     out = Path(args.out) / tag; out.mkdir(parents=True, exist_ok=True)
+    args.map_source = 'photoshop:' + conf.get('map_dir', 'ps_maps')  # height/normal patches = Photoshop map crops
     json.dump(vars(args), open(out / 'args.json', 'w'), indent=1)
 
     dfs = build_all_dataframes(conf, args.data_root)
     base, all_df, input_dim, keep = build_concat_base(conf, dfs, device, args.max_patches)
     all_df.groupby('texture').roughness.first().rename('gt').to_csv(out / 'labels.csv')
     print(f'[data] {all_df.texture.nunique()} textures, {len(keep)} patches used | device={device} | tag={tag}')
+    feats = base_features(base) if args.feature_mode == 'original' else None
 
     for r in range(args.start_repeat, args.repeats):
         seed = args.base_seed + r
@@ -330,10 +375,18 @@ def main():
             i_tr, i_va, i_te = sel(tr_t), sel(va_t), sel(te_t)
             y_tr = all_df.roughness.values[i_tr]
             y_min, y_max = float(y_tr.min()), float(y_tr.max())       # normalisation from train fold only
+            if args.feature_mode == 'original' and args.model in ORIGINAL_TARGET_SCALE and args.loss == 'mse':
+                y_min, y_max = ORIGINAL_TARGET_SCALE[args.model]       # target scale of the original study
             ds_tr = NormalizedSubset(base, i_tr, y_min, y_max)
             ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
             ds_va = NormalizedSubset(base, i_va, y_min, y_max)
             ds_te = NormalizedSubset(base, i_te, y_min, y_max)
+            if args.feature_mode == 'original':                      # GLCM min-max fitted on the training fold
+                cols = GLCM_SLICE['original']
+                F_tr = feats[i_tr][:, cols]
+                lo, hi = F_tr.min(0), F_tr.max(0)
+                ds_tr, ds_va, ds_te = (ColumnMinMax(d, cols, lo, hi) for d in (ds_tr, ds_va, ds_te))
+                ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
 
             t0 = time.time()
             model = create_model(conf, input_dim=input_dim, device=device)

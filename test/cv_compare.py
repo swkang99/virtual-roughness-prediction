@@ -1,15 +1,19 @@
 """
 Compare several models run with test/cv_experiment.py on identical folds.
 
-    python -m test.cv_compare results_cv --protocol cv    --ref transformer
-    python -m test.cv_compare results_cv --protocol fixed --ref transformer
+    python -m test.cv_compare output/results_cv --protocol cv    --ref transformer
+    python -m test.cv_compare output/results_cv --protocol fixed --ref transformer
 
 Because make_folds() depends only on (labels, seed), every model sees exactly the
 same train/val/test textures in repeat r -> paired comparisons are valid.
 
 Outputs (in <results_dir>/compare_<protocol>/):
   table.md / table.tex     mean ± SD over repeats for each model (+ constant median baseline)
-  paired_vs_<ref>.md       per-repeat ΔMAE vs reference, wins, Wilcoxon signed-rank tests
+  paired_vs_<ref>.md       per-repeat Δ(MAE, slope, CCC) vs reference, wins, Wilcoxon signed-rank tests (+ Holm)
+
+    --runs  dirA dirB ...   compare exactly these run folders (any setting), e.g. final recipe vs paper baselines
+    --ref   model name or run-folder name
+    --name  output folder name (default compare_<protocol>, or compare_<protocol>_ablation with --include_ablations)
   per_repeat.csv, per_texture.csv
 """
 import argparse, json
@@ -22,27 +26,30 @@ from scipy import stats
 from test.cv_aggregate import tex_metrics
 
 DISPLAY = {'lr': 'LR', 'svr': 'SVR', 'ann': 'ANN', 'cnn_1d_simple': 'Simple 1D-CNN',
-           'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': '1D-CNN (Taye)',
+           'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': 'Scirep 1D-CNN',
            'transformer': 'Transformer (ours)', 'gated_mlp': 'Gated MLP', 'gated_mlp_v2': 'Gated MLP v2'}
-ORDER = ['lr', 'svr', 'ann', 'cnn_1d_wassem', 'cnn_1d_simple', 'transformer']
+ORDER = ['lr', 'svr', 'ann', 'cnn_1d_wassem', 'cnn_1d_scirep', 'cnn_1d_simple', 'transformer']
 METRICS = [('patch_MAE', 'MAE (patch)', 'min'), ('patch_RMSE', 'RMSE (patch)', 'min'),
            ('tex_MAE', 'MAE (texture)', 'min'), ('slope', 'Slope', 'one'),
            ('r', 'Pearson r', 'max'), ('CCC', 'CCC', 'max')]
 
 
-def load_runs(root, protocol, only_paper_setting=True):
+def load_runs(root, protocol, only_paper_setting=True, dirs=None, feature_mode='original'):
     runs = {}
     for d in sorted(Path(root).iterdir()):
+        if dirs is not None and d.name not in dirs:
+            continue
         a = d / 'args.json'
         if not a.exists() or not list(d.glob('*_pred.csv')):
             continue
         args = json.load(open(a))
         if args['protocol'] != protocol:
             continue
+        fm = args.get('feature_mode') or ('legacy' if args['model'] not in ('transformer', 'cnn_1d_simple') else None)
         paper = (args['loss'] == 'mse' and not args['lds'] and not args['aug']
-                 and not args['cosine'] and args['select'] == 'val_rmse')
+                 and not args['cosine'] and args['select'] == 'val_rmse' and fm in (None, feature_mode))
         key = args['model'] if paper else f"{args['model']}:{d.name}"
-        if only_paper_setting and not paper:
+        if only_paper_setting and not paper and dirs is None:
             continue
         P = pd.concat([pd.read_csv(f) for f in sorted(d.glob('*_pred.csv'))], ignore_index=True)
         M = [json.load(open(f)) for f in sorted(d.glob('*_meta.json'))]
@@ -63,16 +70,25 @@ def median_baseline(run):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('root', nargs='?', default='results_cv')
+    ap.add_argument('root', nargs='?', default='output/results_cv')
     ap.add_argument('--protocol', choices=['cv', 'fixed'], default='cv')
     ap.add_argument('--ref', default='transformer')
     ap.add_argument('--include_ablations', action='store_true', help='also list non-paper settings')
+    ap.add_argument('--runs', nargs='+', default=None, help='explicit list of run folder names to compare')
+    ap.add_argument('--name', default=None, help='output folder name inside root')
+    ap.add_argument('--feature_mode', default='original', help='which feature-extraction mode counts as the baseline setting')
     a = ap.parse_args()
 
-    runs = load_runs(a.root, a.protocol, only_paper_setting=not a.include_ablations)
+    runs = load_runs(a.root, a.protocol, only_paper_setting=not a.include_ablations, dirs=a.runs, feature_mode=a.feature_mode)
     if not runs:
         raise SystemExit(f'no {a.protocol} runs found in {a.root}')
-    out = Path(a.root) / f'compare_{a.protocol}'; out.mkdir(exist_ok=True)
+    # --ref may be a model name ('transformer') or a run-folder name
+    if a.ref not in runs:
+        hit = [k for k, v in runs.items() if v['dir'].name == a.ref]
+        if hit:
+            a.ref = hit[0]
+    name_out = a.name or (f'compare_{a.protocol}_ablation' if a.include_ablations else f'compare_{a.protocol}')
+    out = Path(a.root) / name_out; out.mkdir(exist_ok=True)
 
     # common repeats across all models (paired design)
     common = sorted(set.intersection(*[set(v['P'].repeat.unique()) for v in runs.values()]))
@@ -129,32 +145,47 @@ def main():
     (out / 'table.md').write_text('\n'.join(md), encoding='utf-8')
     (out / 'table.tex').write_text('\n'.join(tex), encoding='utf-8')
 
-    # paired comparisons vs reference
+    # paired comparisons vs reference: MAE (lower better), slope & CCC (higher better)
     if a.ref in runs:
         n_tex = int((TT.model == a.ref).sum())
+        PAIR = [('patch_MAE', 'ΔMAE', -1), ('slope', 'Δslope', +1), ('CCC', 'ΔCCC', +1)]
+        hdr = ' | '.join(f'{l} (ref − model), mean ± SD | ref better | p | p Holm' for _, l, _ in PAIR)
         pm = [f'## Paired comparison vs {name(a.ref)} ({a.protocol}, {n_rep} repeats, {n_tex} test textures)', '',
-              '| Model | ΔMAE (patch) per repeat, mean ± SD | ref better in | Wilcoxon p (repeats) | ΔMAE per texture (mean) | Wilcoxon p (textures) |',
-              '|---|---|---|---|---|---|']
-        ref_r = R[R.model == a.ref].set_index('repeat').patch_MAE
+              f'| Model | {hdr} | ΔMAE per texture | p (textures) |', '|---' * (1 + 4 * len(PAIR) + 2) + '|']
+        others = [m for m in models if m != a.ref]
+        cells = {m: [] for m in others}
+        for c, _, sign in PAIR:
+            ref_r = R[R.model == a.ref].set_index('repeat')[c]
+            ps, rows = [], {}
+            for m in others:
+                d = ref_r - R[R.model == m].set_index('repeat')[c].loc[ref_r.index]   # ref − model
+                good = d * sign                                                     # >0 : reference is better
+                ok = n_rep >= 5 and np.any(d != 0) and not (m == 'median_baseline' and c != 'patch_MAE')
+                p = stats.wilcoxon(d).pvalue if ok else np.nan
+                rows[m] = (d, good, p); ps.append(p)
+            # Holm correction across the compared models (per metric)
+            pv = np.array(ps, float); holm = np.full_like(pv, np.nan); idx = np.where(~np.isnan(pv))[0]
+            order = idx[np.argsort(pv[idx])]; run_max = 0.0
+            for i, j in enumerate(order):
+                run_max = max(run_max, min(1.0, (len(order) - i) * pv[j])); holm[j] = run_max
+            for m, h in zip(others, holm):
+                d, good, p = rows[m]
+                cells[m].append(f'{d.mean():+.3f} ± {d.std(ddof=1) if n_rep > 1 else 0:.3f} | '
+                                f'{int((good > 0).sum())}/{n_rep} | {p:.4f} | {h:.4f}')
         ref_t = TT[TT.model == a.ref].set_index('texture').abs_err
-        for m in models:
-            if m == a.ref:
-                continue
-            other = R[R.model == m].set_index('repeat').patch_MAE.loc[ref_r.index]
-            diff = other - ref_r                               # >0 : reference is better
-            p_r = stats.wilcoxon(diff).pvalue if n_rep >= 5 and np.any(diff != 0) else np.nan
+        for m in others:
             if m == 'median_baseline':
-                p_t, dt = np.nan, np.nan        # texture-level errors are not stored for the constant baseline
+                dt, p_t = np.nan, np.nan
             else:
                 ot = TT[TT.model == m].set_index('texture').abs_err.loc[ref_t.index]
                 dt = (ot - ref_t).mean(); p_t = stats.wilcoxon(ot - ref_t).pvalue
-            pm.append(f'| {name(m)} | {diff.mean():+.2f} ± {diff.std(ddof=1) if n_rep > 1 else 0:.2f} | '
-                      f'{int((diff > 0).sum())}/{n_rep} | {p_r:.4f} | {dt:+.2f} | {p_t:.4g} |')
-        pm += ['', 'Δ > 0 means the reference model has the lower error. Repeat-level test: n = number of repeats '
-                   '(with 10 repeats the smallest attainable two-sided p is 0.002). Texture-level test uses the '
-                   f'test error of each of the {n_tex} textures averaged over repeats; report Holm-corrected p if '
-                   'several baselines are compared.']
-        (out / f'paired_vs_{a.ref}.md').write_text('\n'.join(pm), encoding='utf-8')
+            pm.append(f'| {name(m)} | ' + ' | '.join(cells[m]) + f' | {dt:+.2f} | {p_t:.4g} |')
+        pm += ['', 'Each Δ is reference minus model per repeat; "ref better" counts repeats where the reference has lower MAE '
+                   '/ higher slope / higher CCC. Wilcoxon signed-rank over repeats (10 repeats: smallest two-sided p = 0.002); '
+                   'Holm = Holm–Bonferroni across the listed models for that metric. Texture-level column: per-texture '
+                   f'absolute error averaged over repeats, model minus ref (> 0: ref better), {n_tex} textures.']
+        safe = a.ref.replace(':', '__')                                 # ':' is not allowed in Windows file names
+        (out / f'paired_vs_{safe}.md').write_text('\n'.join(pm), encoding='utf-8')
         print('\n'.join(md)); print(); print('\n'.join(pm))
     else:
         print('\n'.join(md))

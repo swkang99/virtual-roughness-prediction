@@ -8,58 +8,66 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Paper (Hassan et al. 2023): two sub-1D-CNNs (kernels 3 / 5), 5 conv layers (32, 64, 128, 128, 256 kernels)
+# each followed by ReLU + BN, two 1x2 max-pooling layers, FC 100 -> 50 per branch, an FC layer with 100 nodes
+# that joins the branches, sigmoid output, MSE + Adam.
+# Details the paper does not give follow the authors' Keras code (CNN1D_updated.py):
+#   * Conv1D padding='valid' (no padding)                          -> PADDING = 0
+#   * pooling after conv1 and conv5
+#   * the joining Dense(100) has no activation (linear)             -> fc_combined without ReLU
+PADDING = 0
+
 
 class CNN1DWassem(nn.Module):
     def __init__(self, input_dim):
         super(CNN1DWassem, self).__init__()
 
-        seq_len_after_pools = max(1, input_dim // 4)
         
         # =========================
         # Narrow path (kernel=3)
         # =========================
-        self.conv1_narrow = nn.Conv1d(1, 32, kernel_size=3, stride=1, padding=1)
+        self.conv1_narrow = nn.Conv1d(1, 32, kernel_size=3, stride=1, padding=PADDING)
         self.bn1_narrow   = nn.BatchNorm1d(32)
         self.mp1_narrow   = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        self.conv2_narrow = nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.conv2_narrow = nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=PADDING)
         self.bn2_narrow   = nn.BatchNorm1d(64)
 
-        self.conv3_narrow = nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.conv3_narrow = nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=PADDING)
         self.bn3_narrow   = nn.BatchNorm1d(128)
 
-        self.conv4_narrow = nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.conv4_narrow = nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=PADDING)
         self.bn4_narrow   = nn.BatchNorm1d(128)
 
-        self.conv5_narrow = nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.conv5_narrow = nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=PADDING)
         self.bn5_narrow   = nn.BatchNorm1d(256)
         self.mp2_narrow   = nn.MaxPool1d(kernel_size=2, stride=2)
         
         self.flatten = nn.Flatten()
-        self.fc1_narrow = nn.Linear(256 * seq_len_after_pools, 100)
+        self.fc1_narrow = nn.Linear(256 * self._branch_len(input_dim, 3), 100)
         self.fc2_narrow = nn.Linear(100, 50)
 
         # =========================
         # Wide path (kernel=5)
         # =========================
-        self.conv1_wide = nn.Conv1d(1, 32, kernel_size=5, stride=1, padding=2)
+        self.conv1_wide = nn.Conv1d(1, 32, kernel_size=5, stride=1, padding=PADDING)
         self.bn1_wide   = nn.BatchNorm1d(32)
         self.mp1_wide   = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        self.conv2_wide = nn.Conv1d(32, 64, kernel_size=5, stride=1, padding=2)
+        self.conv2_wide = nn.Conv1d(32, 64, kernel_size=5, stride=1, padding=PADDING)
         self.bn2_wide   = nn.BatchNorm1d(64)
 
-        self.conv3_wide = nn.Conv1d(64, 128, kernel_size=5, stride=1, padding=2)
+        self.conv3_wide = nn.Conv1d(64, 128, kernel_size=5, stride=1, padding=PADDING)
         self.bn3_wide   = nn.BatchNorm1d(128)
 
-        self.conv4_wide = nn.Conv1d(128, 128, kernel_size=5, stride=1, padding=2)
+        self.conv4_wide = nn.Conv1d(128, 128, kernel_size=5, stride=1, padding=PADDING)
         self.bn4_wide   = nn.BatchNorm1d(128)
 
-        self.conv5_wide = nn.Conv1d(128, 256, kernel_size=5, stride=1, padding=2)
+        self.conv5_wide = nn.Conv1d(128, 256, kernel_size=5, stride=1, padding=PADDING)
         self.bn5_wide   = nn.BatchNorm1d(256)
         self.mp2_wide   = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        self.fc1_wide = nn.Linear(256 * seq_len_after_pools, 100)
+        self.fc1_wide = nn.Linear(256 * self._branch_len(input_dim, 5), 100)
         self.fc2_wide = nn.Linear(100, 50)
 
         # =========================
@@ -68,6 +76,18 @@ class CNN1DWassem(nn.Module):
         self.fc_combined  = nn.Linear(50 + 50, 100)
 
         self.output_layer = nn.Linear(100, 1)
+
+    @staticmethod
+    def _branch_len(n, k):
+        """sequence length after conv1 -> pool -> conv2..conv5 -> pool with 'valid' convolutions"""
+        n = (n - k + 2 * PADDING) + 1
+        n = n // 2
+        for _ in range(4):
+            n = (n - k + 2 * PADDING) + 1
+        n = n // 2
+        if n < 1:
+            raise ValueError(f"input_dim too small for CNN1DWassem: {n}")
+        return n
 
     def forward(self, x):
         # x: (batch, input_feature_dim) -> (batch, channels=1, L)
@@ -123,7 +143,7 @@ class CNN1DWassem(nn.Module):
 
         # ----- combine -----
         x_c = torch.cat((x_n, x_w), dim=1)     # (batch, 100)
-        x_c = F.relu(self.fc_combined(x_c))    # (batch, 100)
+        x_c = self.fc_combined(x_c)            # (batch, 100), linear as in the authors' Keras code
 
         # Regression + Sigmoid
         out = self.output_layer(x_c)           # (batch, 1)

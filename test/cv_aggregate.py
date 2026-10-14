@@ -1,7 +1,7 @@
 """
 Aggregate results written by test/cv_experiment.py.
 
-    python -m test.cv_aggregate results_cv/<tag> [results_cv/<tag2> ...] [--max_repeats 3]
+    python -m test.cv_aggregate output/results_cv/<tag> [results_cv/<tag2> ...] [--max_repeats 3]
 
 For each run directory:
   * per repeat, pool the out-of-fold (OOF) predictions of all test textures

@@ -15,13 +15,15 @@ train_tag: 'default'
 # =============================================================================
 
 # Data paths
-data_train_path: 'data/split/train'
-data_val_path: 'data/split/val'
-data_test_path: 'data/split/test'
+data_train_path: 'data/train'
+data_val_path: 'data/val'
+data_test_path: 'data/test'
 data_patch_path: 'patches'
+map_dir: 'ps_maps'          # Photoshop height/normal map crops (python -m src.data.crop_photoshop_maps)
 
 feature_cache_root: 'data/features'
 force_recompute_features: false
+feature_mode: 'original'    # Hassan et al. re-implementation (output/review/WASEEM_CODE_REVIEW.md)
 
 input_size: [256, 256]
 train_y_min: 13.4860 # normalization & denormalization

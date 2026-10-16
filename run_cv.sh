@@ -8,11 +8,15 @@
 #                paper setting, 5-fold CV x 10 + fixed split x 10, then comparison tables
 #   baseline   : transformer only, 5-fold CV x 10
 #   fixed      : transformer only, fixed split x 10 seeds
-#   ablation   : transformer under-fitting remedies, 5-fold CV x 3
+#   ablation   : transformer under-fitting remedies (cumulative), 5-fold CV x 10
 #   all        : compare + ablation
-#   mae_screen : transformer, MAE-oriented recipe (L1 + best val texture MAE + aug + cosine), 5-fold CV x 3
+#   mae_screen : transformer, MAE-oriented recipe (L1 + best val texture MAE + aug + cosine), 5-fold CV x 10
 #   final      : transformer with the chosen RECIPE, 5-fold CV x 10 + fixed split x 10, compared with the baselines
 #   fairness   : OPTIONAL supplement - ANN / Hassan 1D-CNN trained with the same RECIPE (no aug: feature inputs)
+#   components : transformer component ablations with the final RECIPE, 5-fold CV x 10 each:
+#                  input ablation (INPUT_VARIANTS, default "texture" = height/normal replaced by constant maps)
+#                  LSFG ablation  (fusion gates frozen at equal weights 1/3)
+#                then one table with the baselines, the full model and the ablations (same folds)
 #
 # Environment overrides
 #   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
@@ -20,6 +24,7 @@
 #                 L1 recipe: RECIPE="--loss l1 --select val_tex_mae --cosine --lr 3e-4" bash run_cv.sh final
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
 #                 | legacy (feature pipeline of the earlier results)
+#   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
 #   MODELS, DATA_ROOT, FEAT_CACHE, OUT
 set -Eeuo pipefail
 export PYTHONUNBUFFERED=1
@@ -35,8 +40,8 @@ COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mo
 stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
-  compare|baseline|fixed|ablation|all|mae_screen|final|fairness) ;;
-  *) echo "Usage: bash run_cv.sh {compare|baseline|fixed|ablation|all|mae_screen|final|fairness}"; exit 1 ;;
+  compare|baseline|fixed|ablation|all|mae_screen|final|fairness|components) ;;
+  *) echo "Usage: bash run_cv.sh {compare|baseline|fixed|ablation|all|mae_screen|final|fairness|components}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -70,8 +75,8 @@ if [[ $stage == fixed ]]; then
 fi
 
 if [[ $stage == ablation || $stage == all ]]; then
-  # under-fitting remedies for the transformer, cheaper screening: 5-fold x 3 repeats
-  A="--model transformer $COMMON --protocol cv --k 5 --repeats 3"
+  # under-fitting remedies for the transformer (reported in the paper): 5-fold x 10 repeats, same as all comparisons
+  A="--model transformer $COMMON --protocol cv --k 5 --repeats 10"
   run $A --select val_ccc                                               2>&1 | tee -a "$LOGS/abl_select.log"
   run $A --select val_ccc --loss mse_ccc                                2>&1 | tee -a "$LOGS/abl_ccc.log"
   run $A --select val_ccc --loss mse_ccc --lds                          2>&1 | tee -a "$LOGS/abl_ccc_lds.log"
@@ -81,7 +86,7 @@ fi
 
 if [[ $stage == mae_screen ]]; then
   S="--model transformer $COMMON --protocol cv --k 5 --loss l1 --select val_tex_mae --aug --cosine --lr 3e-4"
-  run $S --repeats 3 2>&1 | tee -a "$LOGS/mae_screen.log"
+  run $S --repeats 10 2>&1 | tee -a "$LOGS/mae_screen.log"
   SCREEN=$(tag $S)
   FULL=$(tag --model transformer --protocol cv --k 5 --select val_ccc --loss mse_ccc --lds --aug --cosine --lr 3e-4)
   compare --protocol cv --ref "$SCREEN" --name compare_cv_mae_screen --runs $(paper_runs cv) "$FULL" "$SCREEN" \
@@ -92,7 +97,7 @@ if [[ $stage == final ]]; then
   FINAL_CV=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug)
   FINAL_FX=$(tag --model transformer --protocol fixed $RECIPE --aug)
   echo "final recipe: $RECIPE --aug  ->  $FINAL_CV / $FINAL_FX"
-  # 1) CV x 10 (repeats that already exist, e.g. 0-2 from 'ablation' or 'mae_screen', are skipped)
+  # 1) CV x 10 (already finished by 'ablation' (default recipe) or 'mae_screen' (L1 recipe) -> skipped)
   run --model transformer $COMMON --protocol cv --k 5 --repeats 10 $RECIPE --aug 2>&1 | tee -a "$LOGS/final_cv.log"
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_final --runs $(paper_runs cv) "$FINAL_CV" \
     | tee "$OUT/COMPARE_cv_final.md"
@@ -112,6 +117,21 @@ if [[ $stage == fairness ]]; then
   done
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_fairness --runs $(paper_runs cv) "$FINAL_CV" $FAIR \
     | tee "$OUT/COMPARE_cv_fairness.md"
+fi
+
+if [[ $stage == components ]]; then
+  INPUT_VARIANTS=${INPUT_VARIANTS:-texture}
+  C="--model transformer $COMMON --protocol cv --k 5 --repeats 10 $RECIPE --aug"
+  FINAL_CV=$(tag $C)
+  RUNS=""
+  for v in $INPUT_VARIANTS; do                      # map contribution: same network, maps replaced by constants
+    run $C --inputs "$v" 2>&1 | tee -a "$LOGS/comp_inputs_${v}.log"
+    RUNS+="$(tag $C --inputs "$v") "
+  done
+  run $C --no_lsfg 2>&1 | tee -a "$LOGS/comp_nolsfg.log"   # LSFG contribution: equal fixed fusion weights
+  RUNS+="$(tag $C --no_lsfg) "
+  compare --protocol cv --ref "$FINAL_CV" --name compare_cv_components --runs $(paper_runs cv) "$FINAL_CV" $RUNS \
+    | tee "$OUT/COMPARE_cv_components.md"
 fi
 
 python -m test.cv_aggregate "$OUT"/*/ | tee "$OUT/ALL_SUMMARY.md"

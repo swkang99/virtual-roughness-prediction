@@ -76,6 +76,29 @@ class ColumnMinMax(torch.utils.data.Dataset):
 ORIGINAL_TARGET_SCALE = {'lr': (0.0, 1.0), 'svr': (0.0, 1.0), 'ann': (0.0, 1.0), 'cnn_1d_wassem': (0.0, 100.0)}
 
 
+# Input ablation for the image models (texture / height / normal): a removed map is replaced by a constant
+# "no geometry" map - flat height 0.5 and the straight-up normal (0.5, 0.5, 1.0) = RGB (128, 128, 255).
+# The network is unchanged; the removed input simply carries no information.
+INPUT_VARIANTS = {'all': (True, True), 'texture': (False, False),
+                  'texture_height': (True, False), 'texture_normal': (False, True)}
+
+
+class InputAblation(torch.utils.data.Dataset):
+    def __init__(self, subset, keep_height, keep_normal):
+        self.subset, self.keep_height, self.keep_normal = subset, keep_height, keep_normal
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, i):
+        t, h, n, y = self.subset[i]
+        if not self.keep_height:
+            h = torch.full_like(h, 0.5)
+        if not self.keep_normal:
+            n = torch.empty_like(n); n[0] = 0.5; n[1] = 0.5; n[2] = 1.0
+        return t, h, n, y
+
+
 def base_features(base):
     """stacked feature matrix of a ConcatDataset of PatchFeatureDataset (feature-based models)"""
     return torch.cat([d.features for d in base.datasets]).numpy()
@@ -325,6 +348,10 @@ def main():
     ap.add_argument('--feature_mode', choices=['legacy', 'original'], default=None,
                     help='feature-based models: legacy (results so far) or original (Hassan et al. re-implementation); '
                          'default = config feature_mode or original')
+    ap.add_argument('--inputs', choices=list(INPUT_VARIANTS), default='all',
+                    help='image models: which maps are given (removed maps are replaced by constant maps)')
+    ap.add_argument('--no_lsfg', action='store_true',
+                    help='transformer ablation: fusion gates frozen at equal weights (1/3 each) instead of learned')
     ap.add_argument('--print_tag', action='store_true', help='print the run-folder name for these arguments and exit')
     ap.add_argument('--max_patches', type=int, default=None, help='smoke test only')
     ap.add_argument('--max_folds', type=int, default=None, help='smoke test only')
@@ -338,6 +365,10 @@ def main():
     if args.feature_mode:
         conf['feature_mode'] = args.feature_mode
     is_feature_model = MODEL_DATASET_TYPE.get(args.model) == 'feature'
+    if args.inputs != 'all' and is_feature_model:
+        raise SystemExit('--inputs applies to image models (transformer, cnn_1d_simple) only')
+    if args.no_lsfg and args.model != 'transformer':
+        raise SystemExit('--no_lsfg applies to the transformer only')
     args.feature_mode = conf.get('feature_mode', 'original') if is_feature_model else None
     if is_feature_model:
         conf['feature_mode'] = args.feature_mode
@@ -350,6 +381,7 @@ def main():
     tag = args.tag or (f'{args.model}_{args.protocol}' + (f'{args.k}' if args.protocol == 'cv' else '') +
                        f'_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') + f'_{args.select}' +
+                       (f'_in-{args.inputs}' if args.inputs != 'all' else '') + ('_nolsfg' if args.no_lsfg else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else ''))
     if args.print_tag:
         print(tag); return
@@ -387,9 +419,17 @@ def main():
                 lo, hi = F_tr.min(0), F_tr.max(0)
                 ds_tr, ds_va, ds_te = (ColumnMinMax(d, cols, lo, hi) for d in (ds_tr, ds_va, ds_te))
                 ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
+            if args.inputs != 'all':                                 # map ablation (image models only)
+                kh, kn = INPUT_VARIANTS[args.inputs]
+                ds_tr, ds_va, ds_te = (InputAblation(d, kh, kn) for d in (ds_tr, ds_va, ds_te))
+                ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
 
             t0 = time.time()
             model = create_model(conf, input_dim=input_dim, device=device)
+            if args.no_lsfg:                                         # equal, fixed fusion weights
+                with torch.no_grad():
+                    model.LSFG.fusion_gates.fill_(1.0)
+                model.LSFG.fusion_gates.requires_grad_(False)
             if is_torch_model(model):
                 model, best_epoch, hist = train_torch(model, ds_tr, ds_va, all_df.texture.values[i_va],
                                                       args, device, y_min, y_max)
@@ -407,7 +447,10 @@ def main():
                                     'orig_split': all_df.orig_split.values[i_te], 'gt': g, 'pred': p,
                                     'repeat': r, 'fold': f})
             pred_df.to_csv(out / f'{run_name}_pred.csv', index=False)
+            lsfg = ([round(float(v), 4) for v in model.get_lsfg_weights().cpu()]
+                    if hasattr(model, 'get_lsfg_weights') else None)    # learned [texture, height, normal] weights
             meta = dict(repeat=r, fold=f, seed=seed, best_epoch=int(best_epoch), minutes=(time.time() - t0) / 60,
+                        lsfg_weights=lsfg, inputs=args.inputs,
                         n_train_tex=len(tr_t), n_val_tex=len(va_t), n_test_tex=len(te_t),
                         test=metrics(p, g, all_df.texture.values[i_te]),
                         train=metrics(ptr, gtr, all_df.texture.values[i_tr]),

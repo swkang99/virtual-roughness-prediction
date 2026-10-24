@@ -29,6 +29,22 @@ def tex_metrics(d):
                 tex_MAE=np.abs(t.p - t.g).mean(), slope=slope, r=np.corrcoef(t.g, t.p)[0, 1], CCC=ccc)
 
 
+def complete_repeats(run_dir, P, M):
+    """Keep only repeats whose folds have all finished (a repeat still running would cover only part of the
+    textures and bias the metrics). Expected folds: k for protocol cv, 1 for fixed (from args.json)."""
+    run_dir = Path(run_dir)
+    a = json.load(open(run_dir / 'args.json')) if (run_dir / 'args.json').exists() else {}
+    k = int(a.get('k', 5)) if a.get('protocol', 'cv') == 'cv' else 1
+    if a.get('max_folds'):
+        k = min(k, int(a['max_folds']))
+    done = pd.Series([m['repeat'] for m in M]).value_counts()
+    keep = sorted(int(r) for r, n in done.items() if n >= k)
+    dropped = sorted(set(int(r) for r in done.index) - set(keep))
+    if dropped:
+        print(f'[{run_dir.name}] incomplete repeat(s) {dropped} ignored (fewer than {k} folds finished)', file=sys.stderr)
+    return P[P.repeat.isin(keep)], [m for m in M if m['repeat'] in keep]
+
+
 def ms(x):
     x = np.asarray(x, float)
     return f'{x.mean():.2f} ± {x.std(ddof=1):.2f}' if len(x) > 1 else f'{x.mean():.2f}'
@@ -38,6 +54,9 @@ def summarize(run_dir, max_repeats=None):
     run_dir = Path(run_dir)
     P = pd.concat([pd.read_csv(f) for f in sorted(run_dir.glob('*_pred.csv'))], ignore_index=True)
     M = [json.load(open(f)) for f in sorted(run_dir.glob('*_meta.json'))]
+    P, M = complete_repeats(run_dir, P, M)
+    if not M:
+        return f'## {run_dir.name}: no complete repeat yet'
     if max_repeats is not None:   # e.g. compare a 3-repeat ablation with repeats 0-2 of the baseline (same folds)
         P = P[P.repeat < max_repeats]; M = [m for m in M if m['repeat'] < max_repeats]
     lab_file = run_dir / 'labels.csv'

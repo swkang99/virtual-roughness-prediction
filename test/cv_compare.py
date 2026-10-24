@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from test.cv_aggregate import tex_metrics
+from test.cv_aggregate import tex_metrics, complete_repeats
 
 DISPLAY = {'lr': 'LR', 'svr': 'SVR', 'ann': 'ANN', 'cnn_1d_simple': 'Simple 1D-CNN',
            'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': 'Scirep 1D-CNN',
@@ -53,6 +53,9 @@ def load_runs(root, protocol, only_paper_setting=True, dirs=None, feature_mode='
             continue
         P = pd.concat([pd.read_csv(f) for f in sorted(d.glob('*_pred.csv'))], ignore_index=True)
         M = [json.load(open(f)) for f in sorted(d.glob('*_meta.json'))]
+        P, M = complete_repeats(d, P, M)
+        if not M:
+            continue
         runs[key] = dict(dir=d, P=P, M=M, labels=pd.read_csv(d / 'labels.csv', index_col=0)['gt'])
     return runs
 
@@ -76,6 +79,7 @@ def main():
     ap.add_argument('--include_ablations', action='store_true', help='also list non-paper settings')
     ap.add_argument('--runs', nargs='+', default=None, help='explicit list of run folder names to compare')
     ap.add_argument('--name', default=None, help='output folder name inside root')
+    ap.add_argument('--expect_repeats', type=int, default=10, help='warn in the table header if fewer common repeats')
     ap.add_argument('--feature_mode', default='original', help='which feature-extraction mode counts as the baseline setting')
     a = ap.parse_args()
 
@@ -119,6 +123,10 @@ def main():
 
     n_rep = len(common); n_fold = len({m['fold'] for m in any_run['M']})
     head = f'{a.protocol.upper()}: {n_rep} repeats × {n_fold} fold(s); mean ± SD over repeats; identical folds for all models'
+    if n_rep < a.expect_repeats:
+        short = {k: sorted(v['P'].repeat.unique().tolist()) for k, v in runs.items() if v['P'].repeat.nunique() < a.expect_repeats}
+        head += f' — INCOMPLETE: only {n_rep}/{a.expect_repeats} common repeats'
+        print(f'WARNING: only {n_rep} complete repeats are shared by all runs; runs with fewer repeats: {short}')
     md = [f'## {head}', '', '| Model | ' + ' | '.join(l for _, l, _ in METRICS) + ' |', '|---' * (len(METRICS) + 1) + '|']
     tex = [r'\begin{table}[t]', r'\centering', r'\caption{' + head.replace('×', r'$\times$').replace('±', r'$\pm$') + '}',
            r'\label{tab:cv_compare_' + a.protocol + '}', r'\resizebox{\linewidth}{!}{%',

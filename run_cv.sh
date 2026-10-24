@@ -12,7 +12,8 @@
 #   all        : compare + ablation
 #   mae_screen : transformer, MAE-oriented recipe (L1 + best val texture MAE + aug + cosine), 5-fold CV x 10
 #   final      : transformer with the chosen RECIPE, 5-fold CV x 10 + fixed split x 10, compared with the baselines
-#   fairness   : OPTIONAL supplement - ANN / Hassan 1D-CNN trained with the same RECIPE (no aug: feature inputs)
+#   fairness   : OPTIONAL supplement - same RECIPE for ANN / Hassan 1D-CNN (no aug: feature inputs)
+#                and Simple 1D-CNN (with aug: same image inputs as the proposed model)
 #   components : transformer component ablations with the final RECIPE, 5-fold CV x 10 each:
 #                  input ablation (INPUT_VARIANTS, default "texture" = height/normal replaced by constant maps)
 #                  LSFG ablation  (fusion gates frozen at equal weights 1/3)
@@ -20,8 +21,8 @@
 #
 # Environment overrides
 #   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
-#                 default: "--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4"
-#                 L1 recipe: RECIPE="--loss l1 --select val_tex_mae --cosine --lr 3e-4" bash run_cv.sh final
+#                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen)
+#                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run_cv.sh final
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
 #                 | legacy (feature pipeline of the earlier results)
 #   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
@@ -34,7 +35,7 @@ OUT=${OUT:-output/results_cv}
 LOGS=${LOGS:-output/logs/cv}
 FEATURE_MODE=${FEATURE_MODE:-original}
 MODELS=${MODELS:-"lr svr ann cnn_1d_wassem cnn_1d_scirep cnn_1d_simple transformer"}   # cheap -> expensive
-RECIPE=${RECIPE:-"--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4"}
+RECIPE=${RECIPE:-"--loss l1 --select val_tex_mae --cosine --lr 3e-4"}   # final recipe = Recipe B (chosen 2026-10-24)
 COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mode ${FEATURE_MODE} --patience 40 --amp --out ${OUT}"
 
 stage=${1:-compare}
@@ -81,7 +82,11 @@ if [[ $stage == ablation || $stage == all ]]; then
   run $A --select val_ccc --loss mse_ccc                                2>&1 | tee -a "$LOGS/abl_ccc.log"
   run $A --select val_ccc --loss mse_ccc --lds                          2>&1 | tee -a "$LOGS/abl_ccc_lds.log"
   run $A --select val_ccc --loss mse_ccc --lds --aug --cosine --lr 3e-4 2>&1 | tee -a "$LOGS/abl_full.log"
-  compare --protocol cv --ref transformer --include_ablations | tee "$OUT/COMPARE_cv_ablation.md"
+  ABL=""
+  for f in "--select val_ccc" "--select val_ccc --loss mse_ccc" "--select val_ccc --loss mse_ccc --lds" \
+           "--select val_ccc --loss mse_ccc --lds --aug --cosine --lr 3e-4"; do ABL+="$(tag $A $f) "; done
+  compare --protocol cv --ref transformer --name compare_cv_ablation --runs $(paper_runs cv) $ABL \
+    | tee "$OUT/COMPARE_cv_ablation.md"
 fi
 
 if [[ $stage == mae_screen ]]; then
@@ -111,10 +116,13 @@ if [[ $stage == fairness ]]; then
   # supplementary only: are the recipe gains specific to the transformer? (reference implementations stay the main baselines)
   FINAL_CV=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug)
   FAIR=""
-  for m in ann cnn_1d_wassem; do
+  for m in ann cnn_1d_wassem; do                    # feature-vector inputs: augmentation not applicable
     run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 $RECIPE 2>&1 | tee -a "$LOGS/fair_${m}.log"
     FAIR+="$(tag --model "$m" --protocol cv --k 5 $RECIPE) "
   done
+  # Simple 1D-CNN: same image inputs as the proposed model (texture + height + normal) -> same recipe incl. augmentation
+  run --model cnn_1d_simple $COMMON --protocol cv --k 5 --repeats 10 $RECIPE --aug 2>&1 | tee -a "$LOGS/fair_cnn_1d_simple.log"
+  FAIR+="$(tag --model cnn_1d_simple --protocol cv --k 5 $RECIPE --aug) "
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_fairness --runs $(paper_runs cv) "$FINAL_CV" $FAIR \
     | tee "$OUT/COMPARE_cv_fairness.md"
 fi

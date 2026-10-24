@@ -21,8 +21,8 @@
 #
 # Environment overrides
 #   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
-#                 default: "--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4"
-#                 L1 recipe: RECIPE="--loss l1 --select val_tex_mae --cosine --lr 3e-4" bash run_cv.sh final
+#                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen)
+#                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run_cv.sh final
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
 #                 | legacy (feature pipeline of the earlier results)
 #   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
@@ -35,7 +35,7 @@ OUT=${OUT:-output/results_cv}
 LOGS=${LOGS:-output/logs/cv}
 FEATURE_MODE=${FEATURE_MODE:-original}
 MODELS=${MODELS:-"lr svr ann cnn_1d_wassem cnn_1d_scirep cnn_1d_simple transformer"}   # cheap -> expensive
-RECIPE=${RECIPE:-"--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4"}
+RECIPE=${RECIPE:-"--loss l1 --select val_tex_mae --cosine --lr 3e-4"}   # final recipe = Recipe B (chosen 2026-10-24)
 COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mode ${FEATURE_MODE} --patience 40 --amp --out ${OUT}"
 
 stage=${1:-compare}

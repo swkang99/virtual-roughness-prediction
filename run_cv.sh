@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Texture-level 5-fold CV / fixed-split repeats for the proposed model and all baselines.
+# Texture-level 5-fold CV (x 10 repeats) for the proposed model and all baselines.
 # Finished folds are skipped on restart, so every stage can be stopped and resumed.
 # All results go to output/results_cv and logs to output/logs (output/ is git-ignored).
 #
 # Usage:  bash run_cv.sh <stage>
 #   compare    : all models (LR, SVR, ANN, Hassan 1D-CNN, Scirep 1D-CNN, Simple 1D-CNN, Transformer),
-#                paper setting, 5-fold CV x 10 + fixed split x 10, then comparison tables
+#                paper setting, 5-fold CV x 10, then the comparison table
 #   baseline   : transformer only, 5-fold CV x 10
-#   fixed      : transformer only, fixed split x 10 seeds
 #   ablation   : transformer under-fitting remedies (cumulative), 5-fold CV x 10
 #   all        : compare + ablation
 #   mae_screen : transformer, MAE-oriented recipe (L1 + best val texture MAE + aug + cosine), 5-fold CV x 10
-#   final      : transformer with the chosen RECIPE, 5-fold CV x 10 + fixed split x 10, compared with the baselines
+#   final      : transformer with the chosen RECIPE, 5-fold CV x 10, compared with the baselines
 #   fairness   : OPTIONAL supplement - same RECIPE for ANN / Hassan 1D-CNN (no aug: feature inputs)
 #                and Simple 1D-CNN (with aug: same image inputs as the proposed model)
 #   components : transformer component ablations with the final RECIPE, 5-fold CV x 10 each:
@@ -41,8 +40,8 @@ COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mo
 stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
-  compare|baseline|fixed|ablation|all|mae_screen|final|fairness|components) ;;
-  *) echo "Usage: bash run_cv.sh {compare|baseline|fixed|ablation|all|mae_screen|final|fairness|components}"; exit 1 ;;
+  compare|baseline|ablation|all|mae_screen|final|fairness|components) ;;
+  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|fairness|components}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -60,19 +59,11 @@ if [[ $stage == compare || $stage == all ]]; then
   for m in $MODELS; do
     run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 2>&1 | tee -a "$LOGS/cv_${m}.log"
   done
-  for m in $MODELS; do
-    run --model "$m" $COMMON --protocol fixed --repeats 10 2>&1 | tee -a "$LOGS/fixed_${m}.log"
-  done
-  compare --protocol cv    --ref transformer | tee "$OUT/COMPARE_cv.md"
-  compare --protocol fixed --ref transformer | tee "$OUT/COMPARE_fixed.md"
+  compare --protocol cv --ref transformer | tee "$OUT/COMPARE_cv.md"
 fi
 
 if [[ $stage == baseline ]]; then
   run --model transformer $COMMON --protocol cv --k 5 --repeats 10 2>&1 | tee -a "$LOGS/cv_transformer.log"
-fi
-
-if [[ $stage == fixed ]]; then
-  run --model transformer $COMMON --protocol fixed --repeats 10 2>&1 | tee -a "$LOGS/fixed_transformer.log"
 fi
 
 if [[ $stage == ablation || $stage == all ]]; then
@@ -100,16 +91,11 @@ fi
 
 if [[ $stage == final ]]; then
   FINAL_CV=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug)
-  FINAL_FX=$(tag --model transformer --protocol fixed $RECIPE --aug)
-  echo "final recipe: $RECIPE --aug  ->  $FINAL_CV / $FINAL_FX"
-  # 1) CV x 10 (already finished by 'ablation' (default recipe) or 'mae_screen' (L1 recipe) -> skipped)
+  echo "final recipe: $RECIPE --aug  ->  $FINAL_CV"
+  # CV x 10 (skipped fold by fold if the same run folder already exists, e.g. from 'mae_screen' on this machine)
   run --model transformer $COMMON --protocol cv --k 5 --repeats 10 $RECIPE --aug 2>&1 | tee -a "$LOGS/final_cv.log"
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_final --runs $(paper_runs cv) "$FINAL_CV" \
     | tee "$OUT/COMPARE_cv_final.md"
-  # 2) fixed split x 10 seeds (original train/val/test)
-  run --model transformer $COMMON --protocol fixed --repeats 10 $RECIPE --aug 2>&1 | tee -a "$LOGS/final_fixed.log"
-  compare --protocol fixed --ref "$FINAL_FX" --name compare_fixed_final --runs $(paper_runs fixed) "$FINAL_FX" \
-    | tee "$OUT/COMPARE_fixed_final.md"
 fi
 
 if [[ $stage == fairness ]]; then

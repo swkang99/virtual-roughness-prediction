@@ -18,9 +18,6 @@ Protocol (default: --protocol cv --k 5 --repeats 10)
     -> out-of-fold (OOF) predictions for all 100 textures per repeat
     -> report mean ± SD over repeats (aggregate with test/cv_aggregate.py)
 
---protocol fixed : the original train/val/test split, repeated with R seeds
-                   (mean ± SD over seeds, comparable with the current paper table)
-
 Options to address under-fitting / range compression (all OFF by default = paper setting):
     --loss {mse,huber,ccc,mse_ccc}   CCC = concordance correlation coefficient loss
     --lds                            label-distribution-smoothing re-weighting
@@ -31,7 +28,6 @@ Options to address under-fitting / range compression (all OFF by default = paper
 
 Usage (from repository root):
     python -m test.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
-    python -m test.cv_experiment --model transformer --protocol fixed --repeats 10 --patience 40 --amp
 """
 import argparse, copy, json, math, random, time
 from pathlib import Path
@@ -157,11 +153,9 @@ def build_concat_base(conf, dfs, device, max_patches=None):
 # ----------------------------------------------------------------------------- folds
 def make_folds(all_df, protocol, k, n_val, seed):
     """Return list of (train_tex, val_tex, test_tex) texture-id arrays."""
-    tex = all_df.groupby('texture').agg(y=('roughness', 'first'), split=('orig_split', 'first')).reset_index()
-    if protocol == 'fixed':
-        return [(tex[tex.split == 'train'].texture.values,
-                 tex[tex.split == 'val'].texture.values,
-                 tex[tex.split == 'test'].texture.values)]
+    tex = all_df.groupby('texture').agg(y=('roughness', 'first')).reset_index()
+    if protocol != 'cv':
+        raise ValueError('only --protocol cv is supported (fixed-split evaluation was removed)')
 
     bins = pd.qcut(tex.y, 5, labels=False).values
     outer = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
@@ -323,7 +317,7 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--model', default='transformer')
-    ap.add_argument('--protocol', choices=['cv', 'fixed'], default='cv')
+    ap.add_argument('--protocol', choices=['cv'], default='cv')
     ap.add_argument('--k', type=int, default=5)
     ap.add_argument('--n_val', type=int, default=10, help='validation textures inside each outer fold')
     ap.add_argument('--repeats', type=int, default=10)

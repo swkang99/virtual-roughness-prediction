@@ -17,8 +17,14 @@
 #   lambda_sweep : transformer ONLY, RECIPE, 5-fold CV x 2 repeats (not 10), for each --lambda_ratio in
 #                LAMBDA_GRID (default "8 16 27" - see LAMBDA_GRID below); a light check of whether the
 #                analytically-derived ratio (16.0) sits in a flat region or a clear local optimum exists.
-#                Once lambda is picked here, see run_holdout.sh for the actual all-model comparison
-#                (no CV, single run per model on the full Tier B+A' pool, evaluated once on Tier A).
+#   tune_epochs : EVERY model (except LR/SVR, which have no epoch concept), RECIPE + the chosen LAMBDA,
+#                5-fold CV x TUNE_REPEATS (default 2, NOT 10) - the one hyperparameter selected per model
+#                (see run_holdout.sh's module-level note for why only this one, not the rest of RECIPE).
+#                Writes output/results_cv/epochs.csv (model,best_epoch) via test/pick_epochs.py, which
+#                run_holdout.sh then reads automatically.
+#                Once lambda (lambda_sweep) and per-model epoch (tune_epochs) are both picked, see
+#                run_holdout.sh for the actual comparison: no CV, a single run per model on the full
+#                Tier B+A' pool, evaluated once on the Tier A holdout.
 #   fairness   : OPTIONAL supplement - same RECIPE for ANN / Hassan 1D-CNN (no aug: feature inputs)
 #                and Simple 1D-CNN (with aug: same image inputs as the proposed model)
 #   components : transformer component ablations with the final RECIPE, 5-fold CV x 10 each:
@@ -42,6 +48,9 @@
 #                 | legacy (feature pipeline of the earlier results)
 #   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
 #   LAMBDA_GRID   --lambda_ratio values for 'lambda_sweep' (default "8 16 27")
+#   LAMBDA        the --lambda_ratio 'tune_epochs' trains every model with (default 16 - set this to
+#                 whatever lambda_sweep actually picked, if different from the default)
+#   TUNE_REPEATS  CV repeats for 'tune_epochs' (default 2, NOT 10 - see its note above)
 #   MODELS, DATA_ROOT, FEAT_CACHE, OUT
 set -Eeuo pipefail
 export PYTHONUNBUFFERED=1
@@ -53,13 +62,15 @@ FEATURE_MODE=${FEATURE_MODE:-original}
 MODELS=${MODELS:-"lr svr ann cnn_1d_wassem cnn_1d_scirep cnn_1d_simple transformer"}   # cheap -> expensive
 RECIPE=${RECIPE:-"--loss l1 --select val_tex_mae --cosine --lr 3e-4"}   # final recipe = Recipe B (chosen 2026-10-24)
 LAMBDA_GRID=${LAMBDA_GRID:-"8 16 27"}               # --lambda_ratio grid for 'lambda_sweep' (16.0 = current default)
+LAMBDA=${LAMBDA:-16}                                # --lambda_ratio for 'tune_epochs' - set to lambda_sweep's pick
+TUNE_REPEATS=${TUNE_REPEATS:-2}                     # CV repeats for 'tune_epochs' (not 10 - epoch selection only)
 COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mode ${FEATURE_MODE} --patience 40 --amp --out ${OUT}"
 
 stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
-  compare|baseline|ablation|all|mae_screen|final|lambda_sweep|fairness|components) ;;
-  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|fairness|components}"; exit 1 ;;
+  compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components) ;;
+  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -135,6 +146,23 @@ if [[ $stage == lambda_sweep ]]; then
   done
   compare --protocol cv --name compare_cv_lambda_sweep --runs $RUNS --expect_repeats 2 \
     | tee "$OUT/COMPARE_cv_lambda_sweep.md"
+fi
+
+if [[ $stage == tune_epochs ]]; then
+  # Picks each model's own best_epoch under RECIPE + the chosen LAMBDA (same selection rule - val_tex_mae
+  # - for every model; only the resulting epoch COUNT differs, nothing else in RECIPE does - see the
+  # fairness discussion in run_holdout.sh's module docstring). LR/SVR have no epoch concept and are skipped.
+  # Light CV only (TUNE_REPEATS, default 2): this is hyperparameter selection, not a model comparison.
+  PAIRS=""
+  for m in $MODELS; do
+    [[ "$m" == "lr" || "$m" == "svr" ]] && continue
+    AUG=""; [[ "$m" == "transformer" || "$m" == "cnn_1d_simple" ]] && AUG="--aug"
+    run --model "$m" $COMMON --protocol cv --k 5 --repeats "$TUNE_REPEATS" $RECIPE $AUG --lambda_ratio "$LAMBDA" \
+      2>&1 | tee -a "$LOGS/tune_${m}.log"
+    t=$(tag --model "$m" --protocol cv --k 5 $RECIPE $AUG --lambda_ratio "$LAMBDA")
+    PAIRS+="$m:$t "
+  done
+  python -m test.pick_epochs "$OUT" --pairs $PAIRS | tee "$OUT/EPOCHS_SELECTED.md"
 fi
 
 if [[ $stage == fairness ]]; then

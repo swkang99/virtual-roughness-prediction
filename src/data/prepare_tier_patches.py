@@ -78,6 +78,43 @@ TIER_A_TEXTURE_OVERRIDE = {
     "A8_Exfoliating Towel": "r87_exfoliating_towel",
 }
 
+# Tier A' (pilot re-measured anchor textures) raw Height Map / Normal Map / Texture Image files are
+# named by the pilot capture's quintile bucket + a shortened material name (e.g. "Q1_Sandpaper"),
+# which bears no relationship to the real Hassan-dataset texture id in that row's `texture` column
+# of data/trustworthy/Tier A'/Tier A'.csv (e.g. 81). build_tier_dataframe() (src/data/dataframe.py)
+# takes the token before the first "_" in a patch filename as the texture id and looks it up in that
+# CSV, so Tier A' patches must be written with the real id as that first token - otherwise every
+# Tier A' patch fails with "texture id 'Q1' not found in ...Tier A'.csv". This mapping was derived
+# once by cross-referencing each raw stem's quintile bucket against the CSV's `quintile` column plus
+# a fuzzy match on the material name (each quintile bucket has at most 2 Tier A' textures, and the
+# material name disambiguates the pair), and is fixed here rather than guessed at by string matching
+# at patch-build time.
+TIER_A_PRIME_ID_OVERRIDE = {
+    "Q1_Sandpaper": "81",       # Sandpaper9 (150)
+    "Q2_Hardboard": "10",       # Hard Board2
+    "Q2_Sponge": "71",          # Sponge1
+    "Q3_Tissue": "50",          # Tissue
+    "Q4_CottonFabric": "28",    # Cotton Fabric
+    "Q4_GlitterPaper": "24",    # Glitter Paper
+    "Q5_Aluminum": "26",        # Aluminum Foil
+    "Q5_SmoothFabric": "56",    # Smooth Fabric
+}
+
+
+def _output_stem(stem, tier_name):
+    """Rewrite the raw stem's leading id token to the real texture id for Tier A' (see
+    TIER_A_PRIME_ID_OVERRIDE above); a no-op for every other tier, whose raw stems already start
+    with the real id."""
+    if tier_name != "Tier A'":
+        return stem
+    if stem not in TIER_A_PRIME_ID_OVERRIDE:
+        raise KeyError(
+            f"Tier A' stem {stem!r} has no entry in TIER_A_PRIME_ID_OVERRIDE - add its real "
+            f"texture id (cross-reference Tier A'.csv by quintile + material name) before re-running"
+        )
+    _, _, rest = stem.partition('_')
+    return f"{TIER_A_PRIME_ID_OVERRIDE[stem]}_{rest}"
+
 
 def patch_coords(size=TARGET_SIZE, patch=PATCH, n=N_PATCHES, seed=SEED):
     """Deterministic patch top-left coordinates. Identical for every texture, since every
@@ -168,6 +205,7 @@ def normalize_and_patch(tier_dir, write=True):
     n_patches_written = 0
 
     for stem, tex_path, height_path, normal_path in triplets:
+        out_stem = _output_stem(stem, tier_dir.name)
         tex_img = center_crop_square(Image.open(tex_path).convert("RGB")).resize(
             (TARGET_SIZE, TARGET_SIZE), RESAMPLE_LANCZOS
         )
@@ -180,9 +218,9 @@ def normalize_and_patch(tier_dir, write=True):
 
         if write:
             tex_ext = re.sub(r"^\.", "", tex_path.suffix.lower()) or "jpg"
-            tex_img.save(norm_root / "Texture Image" / f"{stem}.{tex_ext}")
-            height_img.save(norm_root / "Height Map" / f"{stem}_height.png")
-            normal_img.save(norm_root / "Normal Map" / f"{stem}_normal.png")
+            tex_img.save(norm_root / "Texture Image" / f"{out_stem}.{tex_ext}")
+            height_img.save(norm_root / "Height Map" / f"{out_stem}_height.png")
+            normal_img.save(norm_root / "Normal Map" / f"{out_stem}_normal.png")
 
         tex_arr = np.asarray(tex_img)
         height_arr = np.asarray(height_img)
@@ -191,13 +229,13 @@ def normalize_and_patch(tier_dir, write=True):
         for i, (x, y) in enumerate(coords):
             if write:
                 Image.fromarray(tex_arr[y:y + PATCH, x:x + PATCH], mode="RGB").save(
-                    patch_root / "Texture" / f"{stem}_patch_{i:04d}.png"
+                    patch_root / "Texture" / f"{out_stem}_patch_{i:04d}.png"
                 )
                 Image.fromarray(height_arr[y:y + PATCH, x:x + PATCH], mode="L").save(
-                    patch_root / "Height" / f"{stem}_patch_{i:04d}_height_map_gray.png"
+                    patch_root / "Height" / f"{out_stem}_patch_{i:04d}_height_map_gray.png"
                 )
                 Image.fromarray(normal_arr[y:y + PATCH, x:x + PATCH], mode="RGB").save(
-                    patch_root / "Normal" / f"{stem}_patch_{i:04d}_normal_map_rgb.png"
+                    patch_root / "Normal" / f"{out_stem}_patch_{i:04d}_normal_map_rgb.png"
                 )
             n_patches_written += 1
 

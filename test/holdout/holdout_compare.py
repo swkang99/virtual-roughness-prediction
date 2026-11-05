@@ -1,5 +1,5 @@
 """
-Aggregate test/holdout_eval.py runs into the paper's headline comparison table (PPT 261109
+Aggregate test/holdout/holdout_eval.py runs into the paper's headline comparison table (PPT 261109
 slide 5): Model | Texture MAE | CCC | Runtime (ms), plus the significance tests (strategy doc §7):
     primary (uncorrected):   Ours vs Simple 1D-CNN              - Wilcoxon signed-rank, n=8
     secondary (Holm-corrected): Ours vs {LR, SVR, ANN, Hassan 1D-CNN, Scirep 1D-CNN}
@@ -7,8 +7,8 @@ Both run on paired per-texture absolute error (|pred-gt|) over the 8 Tier A hold
 Runtime numbers are not computed here (they come from test/model_running_time.py, reused unchanged
 per the strategy doc - training recipe changed, inference graph did not); pass them via --runtime.
 
-    python -m test.holdout_compare output/results_holdout
-    python -m test.holdout_compare output/results_holdout --runtime output/results_holdout/runtime.csv
+    python -m test.holdout.holdout_compare output/results_holdout
+    python -m test.holdout.holdout_compare output/results_holdout --runtime output/results_holdout/runtime.csv
 """
 import argparse, json
 from pathlib import Path

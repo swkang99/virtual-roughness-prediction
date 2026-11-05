@@ -1,18 +1,20 @@
 """
-Stage 2 holdout evaluation (see claude/whc2027_apt_relabeling_strategy.md, PPT 261109_Real-Time_Roughness_
+Stage 3 holdout evaluation (see claude/whc2027_apt_relabeling_strategy.md, PPT 261109_Real-Time_Roughness_
 Prediction_in_VR.pptx slide 5): train ONE model ONCE on the full Tier B + Tier A' pool (98 textures, no
 internal CV/validation split), then evaluate it ONCE on the Tier A holdout (8 native APT textures, never
 seen in training). This produces the paper's headline "Tier 1" numbers (Texture MAE, CCC per model).
 
-This is stage 2 of a two-stage protocol - stage 1 (test/cv_experiment.py's lambda_sweep, see run_cv.sh)
-picks --lambda_ratio via a light 5-fold CV check on the proposed model only; that value is then reused
-here, unchanged, for every model ("동일 레시피" - strategy doc §7). There is no validation split in this
-stage, so none of cv_experiment.py's --select / --patience early-stopping machinery applies: PyTorch
-models train for the full --epochs (default 300; --cosine anneals the LR to ~0 by the end) and the
+This is stage 3 of the three-stage protocol - stage 1 (test/cv/cv_experiment.py's lambda_sweep, see
+run_cv.sh) picks --lambda_ratio via a light 5-fold CV check on the proposed model only, and stage 2
+(run_cv.sh's tune_epochs, see test/pick_epochs.py) picks each model's own best_epoch under that lambda;
+both are then reused here, unchanged, for every model ("동일 레시피" - strategy doc §7). There is no
+validation split in this stage, so none of cv_experiment.py's --select / --patience early-stopping
+machinery applies: PyTorch models train for the full --epochs (per-model value from stage 2, or
+config.yaml's default if that model wasn't tuned; --cosine anneals the LR to ~0 by the end) and the
 FINAL epoch's weights are used, not a "best" checkpoint.
 
 Usage (from repository root), typically via run_holdout.sh which loops over every model:
-    python -m test.holdout_eval --model transformer --loss l1 --cosine --lr 3e-4 --aug --lambda_ratio 16
+    python -m test.holdout.holdout_eval --model transformer --loss l1 --cosine --lr 3e-4 --aug --lambda_ratio 16
 """
 import argparse, json, math, random, time
 from pathlib import Path
@@ -29,7 +31,7 @@ from src.data.factory import MODEL_DATASET_TYPE
 from src.model.factory import create_model
 from src.trainer import prepare_batch_by_model, forward_by_model, is_torch_model
 from src.model.feature.feature_extractor import GLCM_SLICE
-from test.cv_experiment import (
+from test.cv.cv_experiment import (
     ColumnMinMax, TierWeighted, build_train_pool_dataframes, build_concat_base, base_features,
     set_seed, predict, metrics, make_criterion, dihedral_aug, lds_weights,
 )

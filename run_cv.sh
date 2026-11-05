@@ -74,14 +74,14 @@ case "$stage" in
 esac
 mkdir -p "$LOGS" "$OUT"
 
-run() { echo ">>> python -m test.cv_experiment $*"; python -m test.cv_experiment "$@"; }
-tag() { python -m test.cv_experiment $COMMON "$@" --print_tag; }   # run-folder name for a set of flags
+run() { echo ">>> python -m test.cv.cv_experiment $*"; python -m test.cv.cv_experiment "$@"; }
+tag() { python -m test.cv.cv_experiment $COMMON "$@" --print_tag; }   # run-folder name for a set of flags
 paper_runs() {                                      # paper-setting run folders of all models for one protocol
   local p=$1 out=""
   for m in $MODELS; do out+="$(tag --model "$m" --protocol "$p") "; done
   echo "$out"
 }
-compare() { python -m test.cv_compare "$OUT" --feature_mode "$FEATURE_MODE" "$@"; }
+compare() { python -m test.cv.cv_compare "$OUT" --feature_mode "$FEATURE_MODE" "$@"; }
 
 if [[ $stage == compare || $stage == all ]]; then
   # Paper setting (MSE, Adam, best val RMSE) for every model; identical folds/seeds across models.
@@ -195,4 +195,4 @@ if [[ $stage == components ]]; then
     | tee "$OUT/COMPARE_cv_components.md"
 fi
 
-python -m test.cv_aggregate "$OUT"/*/ | tee "$OUT/ALL_SUMMARY.md"
+python -m test.cv.cv_aggregate "$OUT"/*/ | tee "$OUT/ALL_SUMMARY.md"

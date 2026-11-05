@@ -5,9 +5,9 @@
 #   2. run_cv.sh tune_epochs   - every model, light CV under the SAME recipe + chosen lambda, picks each
 #                                model's own best_epoch (see test/pick_epochs.py)
 #   3. (this script)           - every model trained ONCE on the full Tier B + Tier A' pool (98 textures,
-#                                no CV / validation split - see test/holdout_eval.py), evaluated ONCE on
+#                                no CV / validation split - see test/holdout/holdout_eval.py), evaluated ONCE on
 #                                the Tier A holdout (8 native APT textures, never used in training), then
-#                                compared + significance-tested (test/holdout_compare.py)
+#                                compared + significance-tested (test/holdout/holdout_compare.py)
 #
 # Why only epoch count differs per model, and not the rest of the recipe: loss/lr/cosine/lds/aug are
 # recipe DESIGN choices, deliberately identical across models so a win can't be attributed to a baseline
@@ -57,10 +57,10 @@ for m in $MODELS; do
   [[ "$m" == "transformer" || "$m" == "cnn_1d_simple" ]] && AUG="--aug"
   EP=$(epoch_flag "$m")
   [[ -z "$EP" ]] && echo "[warn] $m: no entry in $EPOCHS_CSV - falling back to config.yaml's epochs (run tune_epochs first)"
-  echo ">>> python -m test.holdout_eval --model $m $RECIPE $AUG $EP --lambda_ratio $LAMBDA"
-  python -m test.holdout_eval --model "$m" --data_root "$DATA_ROOT" --feature_cache_root "$FEAT_CACHE" \
+  echo ">>> python -m test.holdout.holdout_eval --model $m $RECIPE $AUG $EP --lambda_ratio $LAMBDA"
+  python -m test.holdout.holdout_eval --model "$m" --data_root "$DATA_ROOT" --feature_cache_root "$FEAT_CACHE" \
     --feature_mode "$FEATURE_MODE" --out "$OUT" --amp $RECIPE $AUG $EP --lambda_ratio "$LAMBDA" \
     2>&1 | tee -a "$LOGS/holdout_${m}.log"
 done
 
-python -m test.holdout_compare "$OUT" | tee "$OUT/HOLDOUT_SUMMARY.md"
+python -m test.holdout.holdout_compare "$OUT" | tee "$OUT/HOLDOUT_SUMMARY.md"

@@ -45,8 +45,9 @@ The configuration values required to reproduce the model are stored in `config.y
 ## Reproduction
 
 ### Run bash script
-Training and evaluation now run through the Tier-based CV pipeline
-(`test/cv_experiment.py`, driven by `run_cv.sh`); the data lives under
+Training and evaluation now run through the three-stage CV + holdout
+protocol (`test/cv/cv_experiment.py` and `test/holdout/holdout_eval.py`,
+driven by `run_cv.sh` and `run_holdout.sh`); the data lives under
 `data/trustworthy` (see `data_tier_root` in `config.yaml`) rather than the
 old `data/train` / `data/val` / `data/test` split folders.
 

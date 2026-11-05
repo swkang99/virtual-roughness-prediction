@@ -29,7 +29,7 @@ Protocol (default: --protocol cv --k 5 --repeats 10)
             train = remaining textures                       (K=5, n_val=10 -> ~68 textures)
             train with early stopping on val, evaluate best checkpoint on test
     -> out-of-fold (OOF) predictions for all 98 train-pool textures per repeat
-    -> report mean ± SD over repeats (aggregate with test/cv_aggregate.py)
+    -> report mean ± SD over repeats (aggregate with test/cv/cv_aggregate.py)
 
 Options to address under-fitting / range compression (all OFF by default = paper setting):
     --loss {mse,huber,ccc,mse_ccc}   CCC = concordance correlation coefficient loss
@@ -44,8 +44,8 @@ Options to address under-fitting / range compression (all OFF by default = paper
                                       the old unweighted (uniform) loss.
 
 Usage (from repository root):
-    python -m test.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
-    python -m test.cv_experiment --model transformer --lambda_ratio 8    # lambda grid sweep, e.g. {8, 16, 27}
+    python -m test.cv.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
+    python -m test.cv.cv_experiment --model transformer --lambda_ratio 8    # lambda grid sweep, e.g. {8, 16, 27}
 """
 import argparse, copy, json, math, random, time
 from pathlib import Path

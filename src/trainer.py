@@ -2,7 +2,8 @@
 Shared batch-handling utilities for the per-model input conventions (texture/height/normal image
 triplet vs. a flat feature vector, and the gated_mlp / gated_mlp_v2 models' shared-feature inputs).
 
-Used by test/cv_experiment.py (the active Tier-based CV pipeline). The old Trainer class and its
+Used by test/cv/cv_experiment.py and test/holdout/holdout_eval.py (the active Tier-based CV / holdout
+pipelines). The old Trainer class and its
 train/val/test split-path pipeline (which this file used to also contain) were removed: the data
 under data/train, data/val, data/test no longer exists (replaced by the Tier-based pool under
 data/trustworthy - see config.yaml's data_tier_root), so that pipeline could no longer run.

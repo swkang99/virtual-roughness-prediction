@@ -28,7 +28,7 @@
 #   MODELS, DATA_ROOT, FEAT_CACHE, OUT
 set -Eeuo pipefail
 export PYTHONUNBUFFERED=1
-DATA_ROOT=${DATA_ROOT:-data}                       # folder that contains train/ val/ test/
+DATA_ROOT=${DATA_ROOT:-data/trustworthy}           # Tier-based train pool root (Tier B / Tier A'; see config.yaml's data_tier_root)
 FEAT_CACHE=${FEAT_CACHE:-data/features_cv}         # separate cache: the original data/features is never touched
 OUT=${OUT:-output/results_cv}
 LOGS=${LOGS:-output/logs/cv}

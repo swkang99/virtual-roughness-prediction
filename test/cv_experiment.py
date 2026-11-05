@@ -436,7 +436,7 @@ def main():
     if args.print_tag:
         print(tag); return
     out = Path(args.out) / tag; out.mkdir(parents=True, exist_ok=True)
-    args.map_source = 'photoshop:' + conf.get('map_dir', 'ps_maps')  # height/normal patches = Photoshop map crops
+    args.map_source = 'external:' + conf.get('map_dir', 'ps_maps')  # height/normal patches = externally-generated map crops
     json.dump(vars(args), open(out / 'args.json', 'w'), indent=1)
 
     dfs = build_train_pool_dataframes(conf, args.data_root)

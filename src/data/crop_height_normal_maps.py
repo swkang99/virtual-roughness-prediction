@@ -1,7 +1,8 @@
 """
-Prepare the Photoshop-generated height / normal maps for training (run once, repo root):
+Prepare the externally-generated (manually painted) height / normal maps for training
+(run once, repo root):
 
-    python -m src.data.crop_photoshop_maps [--src data/shuffled_withmaps] [--data_root data] [--remove_old_maps]
+    python -m src.data.crop_height_normal_maps [--src data/shuffled_withmaps] [--data_root data] [--remove_old_maps]
 
 1. Re-number   data/shuffled_withmaps/<n>.jpg is matched to the original texture data/<split>/texture_image/<id>.jpg
                by identical file bytes (SHA-256); the map pair <n>.png is copied unchanged to
@@ -57,7 +58,7 @@ def images_by_id(folder):
 
 def load_height(path):
     a = np.asarray(Image.open(path))
-    if a.ndim == 3:                                   # Photoshop saves grey height maps as RGB with R = G = B
+    if a.ndim == 3:                                   # some image editors save grey height maps as RGB with R = G = B
         if not (np.array_equal(a[..., 0], a[..., 1]) and np.array_equal(a[..., 0], a[..., 2])):
             raise ValueError(f"height map is not grey (R, G, B differ): {path}")
         a = a[..., 0]

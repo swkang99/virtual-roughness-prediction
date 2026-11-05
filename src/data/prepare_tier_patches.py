@@ -95,7 +95,7 @@ def center_crop_square(img):
 
 
 def load_height(path):
-    """Collapse Photoshop's RGB-triplicated (R=G=B) height maps and true single-channel
+    """Collapse externally-generated RGB-triplicated (R=G=B) height maps and true single-channel
     grayscale height maps (see project notes on the Tier A/A' vs Tier B export difference)
     to the same single-channel representation."""
     img = Image.open(path)

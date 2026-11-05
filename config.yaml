@@ -7,20 +7,10 @@ batch_size: 56
 epochs: 300
 learning_rate: 1e-3
 weight_decay: 1e-4
-train_tag: 'default'        # output-folder tag used by src/trainer.py's own pipeline only
-                             # (test/cv_experiment.py ignores this and takes --tag / auto-generates one instead)
 
 # =============================================================================
 # Data Configuration
 # =============================================================================
-
-# Legacy train/val/test split paths - used only by src/trainer.py's own full-training pipeline,
-# NOT by the Tier-based CV pipeline (test/cv_experiment.py), which uses data_tier_root below instead.
-data_train_path: 'data/train'
-data_val_path: 'data/val'
-data_test_path: 'data/test'
-data_patch_path: 'patches'
-map_dir: 'ps_maps'          # Photoshop height/normal map crops (python -m src.data.crop_photoshop_maps)
 
 # Tier-based train pool (Tier B + Tier A'; see test/cv_experiment.py, claude/whc2027_apt_relabeling_strategy.md).
 # Tier A (native APT, test-only) lives under the same root but is never loaded by cv_experiment.py.

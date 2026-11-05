@@ -1,8 +1,7 @@
 """
-Compare several models run with test/cv_experiment.py on identical folds.
+Compare several models run with test/cv/cv_experiment.py on identical folds.
 
-    python -m test.cv_compare output/results_cv --protocol cv    --ref transformer
-    python -m test.cv_compare output/results_cv --protocol fixed --ref transformer
+    python -m test.cv.cv_compare output/results_cv --protocol cv --ref transformer
 
 Because make_folds() depends only on (labels, seed), every model sees exactly the
 same train/val/test textures in repeat r -> paired comparisons are valid.
@@ -23,7 +22,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from test.cv_aggregate import tex_metrics, complete_repeats
+from test.cv.cv_aggregate import tex_metrics, complete_repeats
 
 DISPLAY = {'lr': 'LR', 'svr': 'SVR', 'ann': 'ANN', 'cnn_1d_simple': 'Simple 1D-CNN',
            'cnn_1d_wassem': 'Hassan 1D-CNN', 'cnn_1d_scirep': 'Scirep 1D-CNN',
@@ -74,7 +73,7 @@ def median_baseline(run):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('root', nargs='?', default='output/results_cv')
-    ap.add_argument('--protocol', choices=['cv', 'fixed'], default='cv')
+    ap.add_argument('--protocol', choices=['cv'], default='cv')
     ap.add_argument('--ref', default='transformer')
     ap.add_argument('--include_ablations', action='store_true', help='also list non-paper settings')
     ap.add_argument('--runs', nargs='+', default=None, help='explicit list of run folder names to compare')

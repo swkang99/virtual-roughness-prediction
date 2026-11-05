@@ -45,10 +45,20 @@ The configuration values required to reproduce the model are stored in `config.y
 ## Reproduction
 
 ### Run bash script
-You can reproduce the training and testing using the following commands.
+Training and evaluation now run through the three-stage CV + holdout
+protocol (`test/cv/cv_experiment.py` and `test/holdout/holdout_eval.py`,
+driven by `run_cv.sh` and `run_holdout.sh`); the data lives under
+`data/trustworthy` (see `data_tier_root` in `config.yaml`) rather than the
+old `data/train` / `data/val` / `data/test` split folders.
+
+```bash
+bash run_cv.sh <stage>
 ```
-bash train_and_test_all_model_repeatedly.sh <ITERATION>
-```
+
+`<stage>` is one of `compare`, `baseline`, `ablation`, `all`, `mae_screen`,
+`final`, `fairness`, `components` — see the comment header in `run_cv.sh`
+for what each stage runs. Results are written to `output/results_cv` and
+logs to `output/logs` (both git-ignored).
 
 
 ## Reference

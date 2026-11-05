@@ -1,7 +1,7 @@
 """
-Aggregate results written by test/cv_experiment.py.
+Aggregate results written by test/cv/cv_experiment.py.
 
-    python -m test.cv_aggregate output/results_cv/<tag> [results_cv/<tag2> ...] [--max_repeats 3]
+    python -m test.cv.cv_aggregate output/results_cv/<tag> [results_cv/<tag2> ...] [--max_repeats 3]
 
 For each run directory:
   * per repeat, pool the out-of-fold (OOF) predictions of all test textures
@@ -31,7 +31,7 @@ def tex_metrics(d):
 
 def complete_repeats(run_dir, P, M):
     """Keep only repeats whose folds have all finished (a repeat still running would cover only part of the
-    textures and bias the metrics). Expected folds: k for protocol cv, 1 for fixed (from args.json)."""
+    textures and bias the metrics). Expected folds: k (from args.json)."""
     run_dir = Path(run_dir)
     a = json.load(open(run_dir / 'args.json')) if (run_dir / 'args.json').exists() else {}
     k = int(a.get('k', 5)) if a.get('protocol', 'cv') == 'cv' else 1

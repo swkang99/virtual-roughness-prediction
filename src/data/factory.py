@@ -19,14 +19,26 @@ MODEL_DATASET_TYPE = {
 
 def _infer_split_name(full_df):
     """
-    Infer split name from texture_path.
+    Infer a feature-cache subfolder name for this dataframe.
 
-    Expected examples:
+    Tier-based dataframes (src.data.dataframe.build_tier_dataframe) carry their own
+    'tier' column ('B' / "A'" / 'A') - trust that directly rather than guessing from
+    the path, since it is unambiguous and the Tier folder names ("Tier A'") are not
+    filesystem-safe as cache subfolder names on every OS.
+
+    Otherwise (legacy train/val/test dataframes), infer the split from texture_path:
         .../train/...
         .../val/...
         .../test/...
     """
-    if len(full_df) == 0 or "texture_path" not in full_df.columns:
+    if len(full_df) == 0:
+        return "unknown"
+
+    if "tier" in full_df.columns:
+        tier = str(full_df.iloc[0]["tier"])
+        return "tier_" + tier.replace("'", "prime").replace(" ", "_")
+
+    if "texture_path" not in full_df.columns:
         return "unknown"
 
     path = Path(str(full_df.iloc[0]["texture_path"]))

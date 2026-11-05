@@ -8,9 +8,17 @@
 #                paper setting, 5-fold CV x 10, then the comparison table
 #   baseline   : transformer only, 5-fold CV x 10
 #   ablation   : transformer under-fitting remedies (cumulative), 5-fold CV x 10
+#                DONE (2026-10-24) - this is how Recipe B below was chosen; kept for reproducibility,
+#                not meant to be rerun unless the recipe itself is being revisited.
 #   all        : compare + ablation
 #   mae_screen : transformer, MAE-oriented recipe (L1 + best val texture MAE + aug + cosine), 5-fold CV x 10
+#                DONE (2026-10-24) - same status as 'ablation' above.
 #   final      : transformer with the chosen RECIPE, 5-fold CV x 10, compared with the baselines
+#   lambda_sweep : transformer ONLY, RECIPE, 5-fold CV x 2 repeats (not 10), for each --lambda_ratio in
+#                LAMBDA_GRID (default "8 16 27" - see LAMBDA_GRID below); a light check of whether the
+#                analytically-derived ratio (16.0) sits in a flat region or a clear local optimum exists.
+#                Once lambda is picked here, see run_holdout.sh for the actual all-model comparison
+#                (no CV, single run per model on the full Tier B+A' pool, evaluated once on Tier A).
 #   fairness   : OPTIONAL supplement - same RECIPE for ANN / Hassan 1D-CNN (no aug: feature inputs)
 #                and Simple 1D-CNN (with aug: same image inputs as the proposed model)
 #   components : transformer component ablations with the final RECIPE, 5-fold CV x 10 each:
@@ -20,11 +28,20 @@
 #
 # Environment overrides
 #   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
-#                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen)
+#                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen,
+#                 both DONE - see their notes above; not expected to change again)
 #                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run_cv.sh final
+#
+# --lambda_ratio (Tier A':Tier B loss weight, cv_experiment.py) defaults to 16.0, derived analytically from the
+# participant-level rating variance (see whc2027_apt_relabeling_strategy.md, PPT 261109 slide 3/8). 'lambda_sweep'
+# below is a light CV check of that value against its 90% CI bounds {8, 16, 27} - Ours only, repeats=2, no
+# baseline models involved. This is distinct from the holdout comparison across all models (see run_holdout.sh):
+# the chosen lambda from here feeds that stage, which trains every model once on the full Tier B+A' pool (no CV)
+# and evaluates once on the Tier A holdout.
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
 #                 | legacy (feature pipeline of the earlier results)
 #   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
+#   LAMBDA_GRID   --lambda_ratio values for 'lambda_sweep' (default "8 16 27")
 #   MODELS, DATA_ROOT, FEAT_CACHE, OUT
 set -Eeuo pipefail
 export PYTHONUNBUFFERED=1
@@ -35,13 +52,14 @@ LOGS=${LOGS:-output/logs/cv}
 FEATURE_MODE=${FEATURE_MODE:-original}
 MODELS=${MODELS:-"lr svr ann cnn_1d_wassem cnn_1d_scirep cnn_1d_simple transformer"}   # cheap -> expensive
 RECIPE=${RECIPE:-"--loss l1 --select val_tex_mae --cosine --lr 3e-4"}   # final recipe = Recipe B (chosen 2026-10-24)
+LAMBDA_GRID=${LAMBDA_GRID:-"8 16 27"}               # --lambda_ratio grid for 'lambda_sweep' (16.0 = current default)
 COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mode ${FEATURE_MODE} --patience 40 --amp --out ${OUT}"
 
 stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
-  compare|baseline|ablation|all|mae_screen|final|fairness|components) ;;
-  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|fairness|components}"; exit 1 ;;
+  compare|baseline|ablation|all|mae_screen|final|lambda_sweep|fairness|components) ;;
+  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|fairness|components}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -67,6 +85,8 @@ if [[ $stage == baseline ]]; then
 fi
 
 if [[ $stage == ablation || $stage == all ]]; then
+  # DONE (2026-10-24) - this run is what selected Recipe B (see RECIPE above). Rerun only if the recipe
+  # itself is being revisited; kept (not deleted) for paper reproducibility / review response.
   # under-fitting remedies for the transformer (reported in the paper): 5-fold x 10 repeats, same as all comparisons
   A="--model transformer $COMMON --protocol cv --k 5 --repeats 10"
   run $A --select val_ccc                                               2>&1 | tee -a "$LOGS/abl_select.log"
@@ -81,6 +101,8 @@ if [[ $stage == ablation || $stage == all ]]; then
 fi
 
 if [[ $stage == mae_screen ]]; then
+  # DONE (2026-10-24) - same status as 'ablation' above: this is how the L1/val_tex_mae choice in
+  # Recipe B was confirmed. Kept for reproducibility, not meant to be rerun.
   S="--model transformer $COMMON --protocol cv --k 5 --loss l1 --select val_tex_mae --aug --cosine --lr 3e-4"
   run $S --repeats 10 2>&1 | tee -a "$LOGS/mae_screen.log"
   SCREEN=$(tag $S)
@@ -96,6 +118,23 @@ if [[ $stage == final ]]; then
   run --model transformer $COMMON --protocol cv --k 5 --repeats 10 $RECIPE --aug 2>&1 | tee -a "$LOGS/final_cv.log"
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_final --runs $(paper_runs cv) "$FINAL_CV" \
     | tee "$OUT/COMPARE_cv_final.md"
+fi
+
+if [[ $stage == lambda_sweep ]]; then
+  # Lambda validation only (PPT 261109 slides 4/8/9): 5-fold CV, repeats=2 (NOT 10), Ours (transformer) ONLY -
+  # no other model is trained or compared here. This is a light 1-D check of the 90% CI around the
+  # analytically-derived ratio (lambda*=16.3 -> grid {8,16,27}, see the RECIPE note above), not the full
+  # model-comparison protocol. lambda=16 reuses the 'final' stage's run unchanged: cv_experiment.py's
+  # run-folder tag omits --lambda_ratio when it equals the 16.0 default, so that fold set is recognised as
+  # already done and skipped rather than retrained.
+  RUNS=""
+  for lam in $LAMBDA_GRID; do
+    run --model transformer $COMMON --protocol cv --k 5 --repeats 2 $RECIPE --aug --lambda_ratio "$lam" \
+      2>&1 | tee -a "$LOGS/lambda_${lam}.log"
+    RUNS+="$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam") "
+  done
+  compare --protocol cv --name compare_cv_lambda_sweep --runs $RUNS --expect_repeats 2 \
+    | tee "$OUT/COMPARE_cv_lambda_sweep.md"
 fi
 
 if [[ $stage == fairness ]]; then

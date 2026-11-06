@@ -5,15 +5,15 @@ internal CV/validation split), then evaluate it ONCE on the Tier A holdout (8 na
 seen in training). This produces the paper's headline "Tier 1" numbers (Texture MAE, CCC per model).
 
 This is stage 3 of the three-stage protocol - stage 1 (test/cv/cv_experiment.py's lambda_sweep, see
-run_cv.sh) picks --lambda_ratio via a light 5-fold CV check on the proposed model only, and stage 2
-(run_cv.sh's tune_epochs, see test/pick_epochs.py) picks each model's own best_epoch under that lambda;
+run/run_cv.sh) picks --lambda_ratio via a light 5-fold CV check on the proposed model only, and stage 2
+(run/run_cv.sh's tune_epochs, see test/pick/pick_epochs.py) picks each model's own best_epoch under that lambda;
 both are then reused here, unchanged, for every model ("동일 레시피" - strategy doc §7). There is no
 validation split in this stage, so none of cv_experiment.py's --select / --patience early-stopping
 machinery applies: PyTorch models train for the full --epochs (per-model value from stage 2, or
 config.yaml's default if that model wasn't tuned; --cosine anneals the LR to ~0 by the end) and the
 FINAL epoch's weights are used, not a "best" checkpoint.
 
-Usage (from repository root), typically via run_holdout.sh which loops over every model:
+Usage (from repository root), typically via run/run_holdout.sh which loops over every model:
     python -m test.holdout.holdout_eval --model transformer --loss l1 --cosine --lr 3e-4 --aug --lambda_ratio 16
 """
 import argparse, json, math, random, time
@@ -112,7 +112,7 @@ def main():
     ap.add_argument('--amp', action='store_true', help='mixed precision on CUDA')
     ap.add_argument('--lambda_ratio', type=float, default=16.0,
                     help="lambda_A':lambda_B tier loss-weight ratio - same value for every model (see "
-                         "run_cv.sh's lambda_sweep stage, which picks this on the proposed model only)")
+                         "run/run_cv.sh's lambda_sweep stage, which picks this on the proposed model only)")
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--tag', default=None)
     ap.add_argument('--out', default='output/results_holdout', help='output/ is git-ignored')

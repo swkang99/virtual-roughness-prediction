@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stage 3 of the three-stage protocol (PPT 261109_Real-Time_Roughness_Prediction_in_VR.pptx, slide 5;
 # see claude/whc2027_apt_relabeling_strategy.md §7 "same recipe" principle):
-#   1. run_cv.sh lambda_sweep  - Ours only, light CV, picks --lambda_ratio
-#   2. run_cv.sh tune_epochs   - every model, light CV under the SAME recipe + chosen lambda, picks each
-#                                model's own best_epoch (see test/pick_epochs.py)
+#   1. run/run_cv.sh lambda_sweep  - Ours only, light CV, picks --lambda_ratio
+#   2. run/run_cv.sh tune_epochs   - every model, light CV under the SAME recipe + chosen lambda, picks each
+#                                    model's own best_epoch (see test/pick/pick_epochs.py)
 #   3. (this script)           - every model trained ONCE on the full Tier B + Tier A' pool (98 textures,
 #                                no CV / validation split - see test/holdout/holdout_eval.py), evaluated ONCE on
 #                                the Tier A holdout (8 native APT textures, never used in training), then
@@ -15,9 +15,9 @@
 # which is legitimately architecture-dependent - so the SAME selection procedure (stage 2's CV, criterion
 # val_tex_mae) is applied to every model, and only its per-model OUTCOME (best_epoch) is allowed to vary.
 # No other hyperparameter is tuned per model, to avoid reopening that fairness question and to avoid
-# growing the number of CV runs (see run_cv.sh's TUNE_REPEATS note).
+# growing the number of CV runs (see run/run_cv.sh's TUNE_REPEATS note).
 #
-# Usage:  bash run_holdout.sh [lambda_ratio]
+# Usage:  bash run/run_holdout.sh [lambda_ratio]  (or: cd run && bash run_holdout.sh [lambda_ratio])
 #   lambda_ratio defaults to 16 (the analytically-derived point estimate) - pass the value lambda_sweep
 #   actually picked if it differs. Must match what tune_epochs was run with, so epochs.csv (below) lines
 #   up with this lambda.
@@ -27,12 +27,13 @@
 #                 cnn_1d_simple) and without --select (no validation split exists in this stage, so
 #                 cv_experiment.py's early-stopping selection doesn't apply here - see holdout_eval.py)
 #                 default: "--loss l1 --cosine --lr 3e-4" (Recipe B minus --select)
-#   EPOCHS_CSV    per-model epoch counts from run_cv.sh's tune_epochs stage (default
+#   EPOCHS_CSV    per-model epoch counts from run/run_cv.sh's tune_epochs stage (default
 #                 output/results_cv/epochs.csv, columns model,best_epoch,...). A model missing from this
 #                 file (or the file itself missing) falls back to config.yaml's epochs (300) unchanged -
 #                 i.e. tune_epochs hasn't been run (yet) for that model.
-#   FEATURE_MODE, MODELS, DATA_ROOT, FEAT_CACHE, OUT, LOGS  - same meaning as run_cv.sh
+#   FEATURE_MODE, MODELS, DATA_ROOT, FEAT_CACHE, OUT, LOGS  - same meaning as run/run_cv.sh
 set -Eeuo pipefail
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root, regardless of invocation cwd (this script lives in run/)
 export PYTHONUNBUFFERED=1
 LAMBDA=${1:-16}
 DATA_ROOT=${DATA_ROOT:-data/trustworthy}

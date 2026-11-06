@@ -1,5 +1,5 @@
 """
-Auto-picks the lambda_ratio from run_cv.sh's lambda_sweep stage (PPT 261109_Real-Time_Roughness_
+Auto-picks the lambda_ratio from run/run_cv.sh's lambda_sweep stage (PPT 261109_Real-Time_Roughness_
 Prediction_in_VR.pptx slides 4/8/9; see claude/whc2027_apt_relabeling_strategy.md). lambda_sweep runs
 the proposed model only, 5-fold CV x 2 repeats, for each --lambda_ratio in LAMBDA_GRID ({8, 16, 27} by
 default - the 90% CI around the analytically-derived point estimate 16.3), then test.cv.cv_compare
@@ -11,15 +11,15 @@ comparison tables, and the same quantity --select val_tex_mae optimizes for duri
 light 1-D check of whether the analytically-derived ratio sits in a flat region or a clear local
 optimum exists (strategy doc), not a second round of model comparison.
 
-    python -m test.pick_lambda output/results_cv/compare_cv_lambda_sweep/per_repeat.csv \
+    python -m test.pick.pick_lambda output/results_cv/compare_cv_lambda_sweep/per_repeat.csv \
         --pairs 8:transformer:tag8 16:transformer:tag16 27:transformer:tag27
 
-Prints a markdown table + the chosen value (run_cv.sh pipes this to <out>/LAMBDA_SELECTED.md via tee,
-same pattern as test/pick_epochs.py + EPOCHS_SELECTED.md) and writes <out>/lambda.txt itself (just the
+Prints a markdown table + the chosen value (run/run_cv.sh pipes this to <out>/LAMBDA_SELECTED.md via tee,
+same pattern as test/pick/pick_epochs.py + EPOCHS_SELECTED.md) and writes <out>/lambda.txt itself (just the
 chosen lambda, one line - for `LAMBDA=$(cat output/results_cv/lambda.txt)` in a wrapper script). <out>
 defaults to the per_repeat.csv's own parent directory's parent (i.e. output/results_cv, not
-.../compare_cv_lambda_sweep), so lambda.txt sits next to epochs.csv (test/pick_epochs.py's output) for
-run_cv.sh's tune_epochs stage and run_holdout.sh to both pick up directly.
+.../compare_cv_lambda_sweep), so lambda.txt sits next to epochs.csv (test/pick/pick_epochs.py's output) for
+run/run_cv.sh's tune_epochs stage and run/run_holdout.sh to both pick up directly.
 """
 import argparse
 from pathlib import Path
@@ -65,8 +65,8 @@ def main():
     md.append(f'Selected lambda_ratio = **{best.lam_str}** (written to {out / "lambda.txt"}).')
     print('\n'.join(md))
 
-    # Only lambda.txt is written here; the markdown above is captured by the caller (run_cv.sh pipes
-    # stdout to $OUT/LAMBDA_SELECTED.md via tee, same pattern as test/pick_epochs.py + EPOCHS_SELECTED.md) -
+    # Only lambda.txt is written here; the markdown above is captured by the caller (run/run_cv.sh pipes
+    # stdout to $OUT/LAMBDA_SELECTED.md via tee, same pattern as test/pick/pick_epochs.py + EPOCHS_SELECTED.md) -
     # writing that file here too would race with tee's own write to the same path.
     (out / 'lambda.txt').write_text(f'{best.lam_str}\n', encoding='utf-8')
 

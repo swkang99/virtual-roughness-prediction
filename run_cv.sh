@@ -139,13 +139,21 @@ if [[ $stage == lambda_sweep ]]; then
   # run-folder tag omits --lambda_ratio when it equals the 16.0 default, so that fold set is recognised as
   # already done and skipped rather than retrained.
   RUNS=""
+  PAIRS=""
   for lam in $LAMBDA_GRID; do
     run --model transformer $COMMON --protocol cv --k 5 --repeats 2 $RECIPE --aug --lambda_ratio "$lam" \
       2>&1 | tee -a "$LOGS/lambda_${lam}.log"
-    RUNS+="$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam") "
+    t=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam")
+    RUNS+="$t "
+    PAIRS+="$lam:transformer:$t "
   done
   compare --protocol cv --name compare_cv_lambda_sweep --runs $RUNS --expect_repeats 2 \
     | tee "$OUT/COMPARE_cv_lambda_sweep.md"
+  # Auto-pick lambda by lowest mean tex_MAE over the sweep (see test/pick_lambda.py) and write
+  # $OUT/lambda.txt, so a wrapper script can do LAMBDA=$(cat "$OUT/lambda.txt") without a human
+  # reading COMPARE_cv_lambda_sweep.md first.
+  python -m test.pick_lambda "$OUT/compare_cv_lambda_sweep/per_repeat.csv" --pairs $PAIRS --out "$OUT" \
+    | tee "$OUT/LAMBDA_SELECTED.md"
 fi
 
 if [[ $stage == tune_epochs ]]; then

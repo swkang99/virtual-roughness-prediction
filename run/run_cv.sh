@@ -3,7 +3,7 @@
 # Finished folds are skipped on restart, so every stage can be stopped and resumed.
 # All results go to output/results_cv and logs to output/logs (output/ is git-ignored).
 #
-# Usage:  bash run_cv.sh <stage>
+# Usage:  bash run/run_cv.sh <stage>  (or: cd run && bash run_cv.sh <stage> - both work, see the cd below)
 #   compare    : all models (LR, SVR, ANN, Hassan 1D-CNN, Scirep 1D-CNN, Simple 1D-CNN, Transformer),
 #                paper setting, 5-fold CV x 10, then the comparison table
 #   baseline   : transformer only, 5-fold CV x 10
@@ -19,11 +19,11 @@
 #                analytically-derived ratio (16.0) sits in a flat region or a clear local optimum exists.
 #   tune_epochs : EVERY model (except LR/SVR, which have no epoch concept), RECIPE + the chosen LAMBDA,
 #                5-fold CV x TUNE_REPEATS (default 2, NOT 10) - the one hyperparameter selected per model
-#                (see run_holdout.sh's module-level note for why only this one, not the rest of RECIPE).
-#                Writes output/results_cv/epochs.csv (model,best_epoch) via test/pick_epochs.py, which
-#                run_holdout.sh then reads automatically.
+#                (see run/run_holdout.sh's module-level note for why only this one, not the rest of RECIPE).
+#                Writes output/results_cv/epochs.csv (model,best_epoch) via test/pick/pick_epochs.py, which
+#                run/run_holdout.sh then reads automatically.
 #                Once lambda (lambda_sweep) and per-model epoch (tune_epochs) are both picked, see
-#                run_holdout.sh for the actual comparison: no CV, a single run per model on the full
+#                run/run_holdout.sh for the actual comparison: no CV, a single run per model on the full
 #                Tier B+A' pool, evaluated once on the Tier A holdout.
 #   fairness   : OPTIONAL supplement - same RECIPE for ANN / Hassan 1D-CNN (no aug: feature inputs)
 #                and Simple 1D-CNN (with aug: same image inputs as the proposed model)
@@ -36,12 +36,12 @@
 #   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
 #                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen,
 #                 both DONE - see their notes above; not expected to change again)
-#                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run_cv.sh final
+#                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run/run_cv.sh final
 #
 # --lambda_ratio (Tier A':Tier B loss weight, cv_experiment.py) defaults to 16.0, derived analytically from the
 # participant-level rating variance (see whc2027_apt_relabeling_strategy.md, PPT 261109 slide 3/8). 'lambda_sweep'
 # below is a light CV check of that value against its 90% CI bounds {8, 16, 27} - Ours only, repeats=2, no
-# baseline models involved. This is distinct from the holdout comparison across all models (see run_holdout.sh):
+# baseline models involved. This is distinct from the holdout comparison across all models (see run/run_holdout.sh):
 # the chosen lambda from here feeds that stage, which trains every model once on the full Tier B+A' pool (no CV)
 # and evaluates once on the Tier A holdout.
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
@@ -53,6 +53,7 @@
 #   TUNE_REPEATS  CV repeats for 'tune_epochs' (default 2, NOT 10 - see its note above)
 #   MODELS, DATA_ROOT, FEAT_CACHE, OUT
 set -Eeuo pipefail
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root, regardless of invocation cwd (this script lives in run/)
 export PYTHONUNBUFFERED=1
 DATA_ROOT=${DATA_ROOT:-data/trustworthy}           # Tier-based train pool root (Tier B / Tier A'; see config.yaml's data_tier_root)
 FEAT_CACHE=${FEAT_CACHE:-data/features_cv}         # separate cache: the original data/features is never touched
@@ -70,7 +71,7 @@ stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
   compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components) ;;
-  *) echo "Usage: bash run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components}"; exit 1 ;;
+  *) echo "Usage: bash run/run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -139,19 +140,27 @@ if [[ $stage == lambda_sweep ]]; then
   # run-folder tag omits --lambda_ratio when it equals the 16.0 default, so that fold set is recognised as
   # already done and skipped rather than retrained.
   RUNS=""
+  PAIRS=""
   for lam in $LAMBDA_GRID; do
     run --model transformer $COMMON --protocol cv --k 5 --repeats 2 $RECIPE --aug --lambda_ratio "$lam" \
       2>&1 | tee -a "$LOGS/lambda_${lam}.log"
-    RUNS+="$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam") "
+    t=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam")
+    RUNS+="$t "
+    PAIRS+="$lam:transformer:$t "
   done
   compare --protocol cv --name compare_cv_lambda_sweep --runs $RUNS --expect_repeats 2 \
     | tee "$OUT/COMPARE_cv_lambda_sweep.md"
+  # Auto-pick lambda by lowest mean tex_MAE over the sweep (see test/pick/pick_lambda.py) and write
+  # $OUT/lambda.txt, so a wrapper script can do LAMBDA=$(cat "$OUT/lambda.txt") without a human
+  # reading COMPARE_cv_lambda_sweep.md first.
+  python -m test.pick.pick_lambda "$OUT/compare_cv_lambda_sweep/per_repeat.csv" --pairs $PAIRS --out "$OUT" \
+    | tee "$OUT/LAMBDA_SELECTED.md"
 fi
 
 if [[ $stage == tune_epochs ]]; then
   # Picks each model's own best_epoch under RECIPE + the chosen LAMBDA (same selection rule - val_tex_mae
   # - for every model; only the resulting epoch COUNT differs, nothing else in RECIPE does - see the
-  # fairness discussion in run_holdout.sh's module docstring). LR/SVR have no epoch concept and are skipped.
+  # fairness discussion in run/run_holdout.sh's module docstring). LR/SVR have no epoch concept and are skipped.
   # Light CV only (TUNE_REPEATS, default 2): this is hyperparameter selection, not a model comparison.
   PAIRS=""
   for m in $MODELS; do
@@ -162,7 +171,7 @@ if [[ $stage == tune_epochs ]]; then
     t=$(tag --model "$m" --protocol cv --k 5 $RECIPE $AUG --lambda_ratio "$LAMBDA")
     PAIRS+="$m:$t "
   done
-  python -m test.pick_epochs "$OUT" --pairs $PAIRS | tee "$OUT/EPOCHS_SELECTED.md"
+  python -m test.pick.pick_epochs "$OUT" --pairs $PAIRS | tee "$OUT/EPOCHS_SELECTED.md"
 fi
 
 if [[ $stage == fairness ]]; then

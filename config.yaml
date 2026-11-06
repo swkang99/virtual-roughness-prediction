@@ -12,7 +12,7 @@ weight_decay: 1e-4
 # Data Configuration
 # =============================================================================
 
-# Tier-based train pool (Tier B + Tier A'; see test/cv_experiment.py, claude/whc2027_apt_relabeling_strategy.md).
+# Tier-based train pool (Tier B + Tier A'; see test/cv/cv_experiment.py, claude/whc2027_apt_relabeling_strategy.md).
 # Tier A (native APT, test-only) lives under the same root but is never loaded by cv_experiment.py.
 data_tier_root: 'data/trustworthy'
 

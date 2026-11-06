@@ -1,17 +1,17 @@
 """
 Picks each model's best_epoch from the light CV run under the final recipe + chosen lambda
-(run_cv.sh's tune_epochs stage). This is deliberately the ONLY hyperparameter selected per model - see
-run_holdout.sh's module docstring for why: epoch count is "when did this architecture converge", not a
+(run/run_cv.sh's tune_epochs stage). This is deliberately the ONLY hyperparameter selected per model - see
+run/run_holdout.sh's module docstring for why: epoch count is "when did this architecture converge", not a
 recipe design choice, so letting it differ by model doesn't reopen the "same recipe" fairness argument
 (strategy doc §7) the way tuning loss/lr/lds/aug per model would.
 
-Reads each run folder's *_meta.json (written by test/cv_experiment.py; 'best_epoch' per repeat x fold)
+Reads each run folder's *_meta.json (written by test/cv/cv_experiment.py; 'best_epoch' per repeat x fold)
 and reports the median across all of them per model.
 
-    python -m test.pick_epochs output/results_cv --pairs ann:ann_cv5_l1_cos_val_tex_mae ...
+    python -m test.pick.pick_epochs output/results_cv --pairs ann:ann_cv5_l1_cos_val_tex_mae ...
 
 Writes <root>/epochs.csv (model,best_epoch,n_runs,min,max) and prints the same as a markdown table.
-run_holdout.sh reads epochs.csv directly to override --epochs per model.
+run/run_holdout.sh reads epochs.csv directly to override --epochs per model.
 """
 import argparse, json
 from pathlib import Path

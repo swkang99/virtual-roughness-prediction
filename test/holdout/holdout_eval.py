@@ -140,10 +140,14 @@ def main():
     args.weight_decay = args.weight_decay if args.weight_decay is not None else float(conf.get('weight_decay', 1e-4))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # lambda_ratio is ALWAYS part of the tag, even at the 16.0 default - see the matching note in
+    # test/cv/cv_experiment.py's tag() for why omitting it at the default is unsafe: the skip check right
+    # below (pred.csv exists -> skip) never inspects the args that produced it, so a run from before tier
+    # weighting existed could otherwise silently alias with a real lambda_ratio=16.0 run.
     tag = args.tag or (f'{args.model}_holdout_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else '') +
-                       (f'_lr{args.lambda_ratio:g}' if args.lambda_ratio != 16.0 else ''))
+                       f'_lr{args.lambda_ratio:g}')
     if args.print_tag:
         print(tag); return
     out = Path(args.out) / tag; out.mkdir(parents=True, exist_ok=True)

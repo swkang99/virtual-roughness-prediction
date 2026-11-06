@@ -136,9 +136,13 @@ if [[ $stage == lambda_sweep ]]; then
   # Lambda validation only (PPT 261109 slides 4/8/9): 5-fold CV, repeats=2 (NOT 10), Ours (transformer) ONLY -
   # no other model is trained or compared here. This is a light 1-D check of the 90% CI around the
   # analytically-derived ratio (lambda*=16.3 -> grid {8,16,27}, see the RECIPE note above), not the full
-  # model-comparison protocol. lambda=16 reuses the 'final' stage's run unchanged: cv_experiment.py's
-  # run-folder tag omits --lambda_ratio when it equals the 16.0 default, so that fold set is recognised as
-  # already done and skipped rather than retrained.
+  # model-comparison protocol. Every lambda in the grid, INCLUDING 16, now trains its own fold set:
+  # cv_experiment.py's run-folder tag always encodes --lambda_ratio (never omitted at the 16.0 default -
+  # fixed 2026-11-06, see that file's tag() comment). Before that fix, lambda=16 silently reused the
+  # 'final'/'mae_screen'/'ablation' folders from before tier-weighted loss existed (pre-2026-10-30, when
+  # every sample was weighted 1.0 unconditionally) as if they were real lambda_ratio=16.0 runs - they were
+  # not the same experiment. If you ran lambda_sweep before this fix, delete the old un-suffixed
+  # transformer_cv5..._val_tex_mae folder under $OUT so lambda=16 retrains for real under the new tag.
   RUNS=""
   PAIRS=""
   for lam in $LAMBDA_GRID; do

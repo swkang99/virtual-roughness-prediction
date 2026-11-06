@@ -41,7 +41,12 @@ Options to address under-fitting / range compression (all OFF by default = paper
     --lambda_ratio R                 lambda_A':lambda_B tier loss-weight ratio (default 16.0,
                                       the participant-level-variance recalculation; see the
                                       lambda-validation slide / strategy doc §4). R=1.0 recovers
-                                      the old unweighted (uniform) loss.
+                                      the old unweighted (uniform) loss. ALWAYS encoded in the run
+                                      tag (see tag() below) - never omitted, even at the default -
+                                      so a pre-tier-weighting run (from before 2026-10-30, when every
+                                      sample was weighted 1.0 unconditionally) can never be silently
+                                      reused as if it were a real lambda_ratio=16.0 run: the two used
+                                      genuinely different training objectives despite the same number.
 
 Usage (from repository root):
     python -m test.cv.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
@@ -427,12 +432,23 @@ def main():
     args.weight_decay = args.weight_decay if args.weight_decay is not None else float(conf.get('weight_decay', 1e-4))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # lambda_ratio is ALWAYS part of the tag, even at the 16.0 default - never omit it. A run folder is
+    # keyed purely by this name and the skip check below (`{run_name}_pred.csv` exists -> skip) never
+    # inspects the args that produced it, so two genuinely different training objectives sharing one name
+    # would silently alias: before 2026-10-30 every sample was weighted 1.0 unconditionally (lambda_ratio
+    # didn't exist as a concept yet), which is NOT the same experiment as an explicit lambda_ratio=16.0
+    # tier-weighted run, even though 16.0 is also this flag's default today. Omitting the suffix at the
+    # default previously caused exactly this: lambda_sweep's and tune_epochs's default-lambda runs for
+    # the transformer silently reused pre-tier-weighting 'final'/'mae_screen'/'ablation' results instead of
+    # actually training with Tier A' upweighted - see the (already-tainted) run folder named without
+    # '_lr...' still sitting in output/results_cv/ from before this fix; delete it so this now-unique tag
+    # trains fresh.
     tag = args.tag or (f'{args.model}_{args.protocol}' + (f'{args.k}' if args.protocol == 'cv' else '') +
                        f'_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') + f'_{args.select}' +
                        (f'_in-{args.inputs}' if args.inputs != 'all' else '') + ('_nolsfg' if args.no_lsfg else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else '') +
-                       (f'_lr{args.lambda_ratio:g}' if args.lambda_ratio != 16.0 else ''))
+                       f'_lr{args.lambda_ratio:g}')
     if args.print_tag:
         print(tag); return
     out = Path(args.out) / tag; out.mkdir(parents=True, exist_ok=True)

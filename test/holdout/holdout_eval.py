@@ -24,6 +24,7 @@ import pandas as pd
 import torch
 import yaml
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from tqdm import tqdm
 
 from src.data.dataframe import build_tier_dataframe
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
@@ -75,7 +76,8 @@ def train_full(model, train_ds, args, device, weight_tr=None):
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
     history = []
-    for epoch in range(args.epochs):
+    epoch_bar = tqdm(range(args.epochs), desc='train (full pool, no val split)', unit='epoch', disable=args.verbose)
+    for epoch in epoch_bar:
         model.train(); t0 = time.time(); run_loss = 0.0
         for batch in loader:
             *core, w = batch
@@ -94,6 +96,8 @@ def train_full(model, train_ds, args, device, weight_tr=None):
         history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds), sec=time.time() - t0))
         if args.verbose:
             print(f'  ep {epoch:3d} loss {history[-1]["train_loss"]:.4f}', flush=True)
+        epoch_bar.set_postfix(loss=f'{history[-1]["train_loss"]:.4f}')
+    epoch_bar.close()
     return model, history
 
 

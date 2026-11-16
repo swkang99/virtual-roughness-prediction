@@ -46,6 +46,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 TARGET_SIZE = 1600
 PATCH = 256
@@ -96,8 +97,19 @@ TIER_A_PRIME_ID_OVERRIDE = {
     "Q3_Tissue": "50",          # Tissue
     "Q4_CottonFabric": "28",    # Cotton Fabric
     "Q4_GlitterPaper": "24",    # Glitter Paper
-    "Q5_Aluminum": "26",        # Aluminum Foil
+    "Q5_AluminumFoil": "26",    # Aluminum Foil - stem renamed 2026-11-16 (was "Q5_Aluminum"); all
+                                # three files (Texture/Height/Normal) now consistently start with
+                                # "Q5_AluminumFoil", so no texture-override entry is needed any more
     "Q5_SmoothFabric": "56",    # Smooth Fabric
+    # 2026-11-16 Tier A' expansion (whc2027_apt_relabeling_strategy.md §9/§11): these four are
+    # genuinely new, non-Hassan physical specimens added to cover the Q5 (low-roughness) material
+    # gap found in the failure analysis, so unlike the eight rows above they have no corresponding
+    # Hassan-dataset texture id - ids 101-104 are newly assigned here (and in Tier A'.csv) and are
+    # intentionally outside the Hassan 1-100 id range used by Tier B / the original Tier A' anchors.
+    "Q5_Leather": "101",        # Leather (new specimen) - distinct physical item from Tier A's A2 Leather
+    "Q5_PolyesterSatin": "102", # PolyesterSatin
+    "Q5_Rubber": "103",         # Rubber (new specimen)
+    "Q5_SiliconSkin": "104",    # SiliconSkin
 }
 
 
@@ -204,7 +216,9 @@ def normalize_and_patch(tier_dir, write=True):
     coords = patch_coords()
     n_patches_written = 0
 
-    for stem, tex_path, height_path, normal_path in triplets:
+    for stem, tex_path, height_path, normal_path in tqdm(
+        triplets, desc=f'{tier_dir.name}: normalize + patch', unit='texture'
+    ):
         out_stem = _output_stem(stem, tier_dir.name)
         tex_img = center_crop_square(Image.open(tex_path).convert("RGB")).resize(
             (TARGET_SIZE, TARGET_SIZE), RESAMPLE_LANCZOS

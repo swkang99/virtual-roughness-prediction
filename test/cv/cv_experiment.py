@@ -62,6 +62,7 @@ import torch.nn as nn
 import yaml
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
+from tqdm import tqdm
 
 from src.data.dataframe import build_tier_dataframe
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
@@ -333,7 +334,8 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
     best, best_state, best_epoch, bad, history = None, None, -1, 0, []
-    for epoch in range(total):
+    epoch_bar = tqdm(range(total), desc='train', unit='epoch', leave=False, disable=args.verbose)
+    for epoch in epoch_bar:
         model.train(); t0 = time.time(); run_loss = 0.0
         for batch in loader:
             *core, w = batch
@@ -364,8 +366,10 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         if args.verbose:
             print(f'  ep {epoch:3d} loss {history[-1]["train_loss"]:.4f} val_rmse {m["patch_rmse"]:.2f} '
                   f'val_texMAE {m["tex_mae"]:.2f} slope {m["tex_slope"]:.2f} {"*" if bad == 0 else ""}', flush=True)
+        epoch_bar.set_postfix(loss=f'{history[-1]["train_loss"]:.4f}', val_texMAE=f'{m["tex_mae"]:.2f}', best=best_epoch)
         if args.patience and bad >= args.patience:
             break
+    epoch_bar.close()
     model.load_state_dict(best_state)
     return model, best_epoch, history
 
@@ -463,10 +467,10 @@ def main():
           f'lambda_ratio={args.lambda_ratio:g}')
     feats = base_features(base) if args.feature_mode == 'original' else None
 
-    for r in range(args.start_repeat, args.repeats):
+    for r in tqdm(range(args.start_repeat, args.repeats), desc='CV repeats', unit='repeat'):
         seed = args.base_seed + r
         folds = make_folds(all_df, args.protocol, args.k, args.n_val, seed)
-        for f, (tr_t, va_t, te_t) in enumerate(folds[:args.max_folds]):
+        for f, (tr_t, va_t, te_t) in enumerate(tqdm(folds[:args.max_folds], desc=f'repeat {r} folds', unit='fold', leave=False)):
             run_name = f'rep{r:02d}_fold{f}'
             if (out / f'{run_name}_pred.csv').exists():
                 print(f'[skip] {run_name} already done'); continue

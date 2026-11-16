@@ -86,7 +86,10 @@ compare() { python -m test.cv.cv_compare "$OUT" --feature_mode "$FEATURE_MODE" "
 
 if [[ $stage == compare || $stage == all ]]; then
   # Paper setting (MSE, Adam, best val RMSE) for every model; identical folds/seeds across models.
+  n_models=$(wc -w <<< "$MODELS"); i=0
   for m in $MODELS; do
+    i=$((i + 1))
+    echo "=== [compare $i/$n_models] model=$m ==="
     run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 2>&1 | tee -a "$LOGS/cv_${m}.log"
   done
   compare --protocol cv --ref transformer | tee "$OUT/COMPARE_cv.md"
@@ -145,7 +148,10 @@ if [[ $stage == lambda_sweep ]]; then
   # transformer_cv5..._val_tex_mae folder under $OUT so lambda=16 retrains for real under the new tag.
   RUNS=""
   PAIRS=""
+  n_lam=$(wc -w <<< "$LAMBDA_GRID"); i=0
   for lam in $LAMBDA_GRID; do
+    i=$((i + 1))
+    echo "=== [lambda_sweep $i/$n_lam] lambda_ratio=$lam ==="
     run --model transformer $COMMON --protocol cv --k 5 --repeats 2 $RECIPE --aug --lambda_ratio "$lam" \
       2>&1 | tee -a "$LOGS/lambda_${lam}.log"
     t=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug --lambda_ratio "$lam")
@@ -167,9 +173,12 @@ if [[ $stage == tune_epochs ]]; then
   # fairness discussion in run/run_holdout.sh's module docstring). LR/SVR have no epoch concept and are skipped.
   # Light CV only (TUNE_REPEATS, default 2): this is hyperparameter selection, not a model comparison.
   PAIRS=""
+  n_models=$(wc -w <<< "$MODELS"); i=0
   for m in $MODELS; do
+    i=$((i + 1))
     [[ "$m" == "lr" || "$m" == "svr" ]] && continue
     AUG=""; [[ "$m" == "transformer" || "$m" == "cnn_1d_simple" ]] && AUG="--aug"
+    echo "=== [tune_epochs $i/$n_models] model=$m ==="
     run --model "$m" $COMMON --protocol cv --k 5 --repeats "$TUNE_REPEATS" $RECIPE $AUG --lambda_ratio "$LAMBDA" \
       2>&1 | tee -a "$LOGS/tune_${m}.log"
     t=$(tag --model "$m" --protocol cv --k 5 $RECIPE $AUG --lambda_ratio "$LAMBDA")

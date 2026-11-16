@@ -53,12 +53,15 @@ epoch_flag() {   # $1 = model name; prints "--epochs N" if epochs.csv has one, e
   [[ -n "$e" ]] && echo "--epochs $e"
 }
 
+N_MODELS=$(wc -w <<< "$MODELS")
+i=0
 for m in $MODELS; do
+  i=$((i + 1))
   AUG=""
   [[ "$m" == "transformer" || "$m" == "cnn_1d_simple" ]] && AUG="--aug"
   EP=$(epoch_flag "$m")
   [[ -z "$EP" ]] && echo "[warn] $m: no entry in $EPOCHS_CSV - falling back to config.yaml's epochs (run tune_epochs first)"
-  echo ">>> python -m test.holdout.holdout_eval --model $m $RECIPE $AUG $EP --lambda_ratio $LAMBDA"
+  echo ">>> [$i/$N_MODELS] python -m test.holdout.holdout_eval --model $m $RECIPE $AUG $EP --lambda_ratio $LAMBDA"
   python -m test.holdout.holdout_eval --model "$m" --data_root "$DATA_ROOT" --feature_cache_root "$FEAT_CACHE" \
     --feature_mode "$FEATURE_MODE" --out "$OUT" --amp $RECIPE $AUG $EP --lambda_ratio "$LAMBDA" \
     2>&1 | tee -a "$LOGS/holdout_${m}.log"

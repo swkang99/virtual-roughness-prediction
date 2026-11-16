@@ -46,6 +46,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 TARGET_SIZE = 1600
 PATCH = 256
@@ -215,7 +216,9 @@ def normalize_and_patch(tier_dir, write=True):
     coords = patch_coords()
     n_patches_written = 0
 
-    for stem, tex_path, height_path, normal_path in triplets:
+    for stem, tex_path, height_path, normal_path in tqdm(
+        triplets, desc=f'{tier_dir.name}: normalize + patch', unit='texture'
+    ):
         out_stem = _output_stem(stem, tier_dir.name)
         tex_img = center_crop_square(Image.open(tex_path).convert("RGB")).resize(
             (TARGET_SIZE, TARGET_SIZE), RESAMPLE_LANCZOS

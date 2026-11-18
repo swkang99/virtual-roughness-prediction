@@ -45,8 +45,14 @@ def load_runs(root, protocol, only_paper_setting=True, dirs=None, feature_mode='
         if args['protocol'] != protocol:
             continue
         fm = args.get('feature_mode') or ('legacy' if args['model'] not in ('transformer', 'cnn_1d_simple') else None)
+        # NOTE (2026-11-18): lambda_ratio must be 1.0 (uniform, no Tier A' upweighting) to count as "paper
+        # setting" - a baseline trained with the default lambda_ratio=16.0 tier-weighted loss was NOT
+        # actually the original paper's training objective, even though every other flag matched. Before
+        # this check was added, such a run was silently mislabeled "paper" here - see
+        # claude/whc2027_apt_relabeling_strategy.md §12.
         paper = (args['loss'] == 'mse' and not args['lds'] and not args['aug']
-                 and not args['cosine'] and args['select'] == 'val_rmse' and fm in (None, feature_mode))
+                 and not args['cosine'] and args['select'] == 'val_rmse' and fm in (None, feature_mode)
+                 and float(args.get('lambda_ratio', 1.0)) == 1.0)
         key = args['model'] if paper else f"{args['model']}:{d.name}"
         if only_paper_setting and not paper and dirs is None:
             continue

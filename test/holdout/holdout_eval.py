@@ -6,12 +6,15 @@ seen in training). This produces the paper's headline "Tier 1" numbers (Texture 
 
 This is stage 3 of the three-stage protocol - stage 1 (test/cv/cv_experiment.py's lambda_sweep, see
 run/run_cv.sh) picks --lambda_ratio via a light 5-fold CV check on the proposed model only, and stage 2
-(run/run_cv.sh's tune_epochs, see test/pick/pick_epochs.py) picks each model's own best_epoch under that lambda;
-both are then reused here, unchanged, for every model ("동일 레시피" - strategy doc §7). There is no
-validation split in this stage, so none of cv_experiment.py's --select / --patience early-stopping
-machinery applies: PyTorch models train for the full --epochs (per-model value from stage 2, or
-config.yaml's default if that model wasn't tuned; --cosine anneals the LR to ~0 by the end) and the
-FINAL epoch's weights are used, not a "best" checkpoint.
+(run/run_cv.sh's tune_epochs, see test/pick/pick_epochs.py) picks each model's own best_epoch. Since
+2026-11-18 (strategy doc §12, supersedes §7's "same recipe for every model"), only the transformer
+(Ours) reuses stage 1/2's RECIPE + lambda here; every other model runs with its own original-paper
+recipe (cv_experiment.py's defaults: loss mse, no lds/aug/cosine) and --lambda_ratio 1 (uniform - Tier
+A' upweighting is Ours' own device, not part of any baseline's original method) - see run/run_holdout.sh.
+There is no validation split in this stage, so none of cv_experiment.py's --select / --patience
+early-stopping machinery applies: PyTorch models train for the full --epochs (per-model value from
+stage 2, or config.yaml's default if that model wasn't tuned; --cosine anneals the LR to ~0 by the end,
+Ours only) and the FINAL epoch's weights are used, not a "best" checkpoint.
 
 Usage (from repository root), typically via run/run_holdout.sh which loops over every model:
     python -m test.holdout.holdout_eval --model transformer --loss l1 --cosine --lr 3e-4 --aug --lambda_ratio 16

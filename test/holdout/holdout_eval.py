@@ -39,7 +39,7 @@ from src.model.feature.feature_extractor import GLCM_SLICE
 from test.cv.cv_experiment import (
     ColumnMinMax, TierWeighted, build_train_pool_dataframes, build_concat_base, base_features,
     set_seed, predict, metrics, make_criterion, dihedral_aug, lds_weights,
-    aggregation_var_loss, check_pk_wiring,
+    aggregation_var_loss, check_pk_wiring, ranking_loss, check_ranking_wiring,
 )
 
 
@@ -85,11 +85,12 @@ def train_full(model, train_ds, args, device, weight_tr=None, train_tex=None):
         loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
-    aux_on = args.agg_alpha > 0 or args.var_beta > 0
+    agg_var_on, rank_on = (args.agg_alpha > 0 or args.var_beta > 0), args.rank_gamma > 0
+    aux_on = agg_var_on or rank_on
     history, sanity_checked = [], False
     epoch_bar = tqdm(range(args.epochs), desc='train (full pool, no val split)', unit='epoch', disable=args.verbose)
     for epoch in epoch_bar:
-        model.train(); t0 = time.time(); run_loss = run_agg = run_var = 0.0
+        model.train(); t0 = time.time(); run_loss = run_agg = run_var = run_rank = 0.0
         for batch in loader:
             *core, w, tex = batch
             inputs, y = prepare_batch_by_model(core, model, device)
@@ -102,18 +103,27 @@ def train_full(model, train_ds, args, device, weight_tr=None, train_tex=None):
             pred = pred.float().view_as(y)
             loss = crit(pred, y, w)
             if aux_on:
-                agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
-                                                               args.agg_alpha, args.var_beta, args.var_margin)
+                agg_l = var_l = rank_l = pred.sum() * 0.0
+                if agg_var_on:
+                    agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
+                                                                   args.agg_alpha, args.var_beta, args.var_margin)
+                if rank_on:
+                    rank_l, n_groups_r, n_pairs = ranking_loss(pred.view(-1), y.view(-1), tex,
+                                                               args.rank_gamma, args.rank_margin)
                 if not sanity_checked:
-                    check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    if agg_var_on:
+                        check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    if rank_on:
+                        check_ranking_wiring(n_groups_r, n_pairs, args.group_P)
                     sanity_checked = True
-                loss = loss + agg_l + var_l
-                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y)
+                loss = loss + agg_l + var_l + rank_l
+                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y); run_rank += rank_l.item() * len(y)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             run_loss += loss.item() * len(y)
         if sched: sched.step()
         history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds),
                             train_agg_loss=run_agg / len(train_ds), train_var_loss=run_var / len(train_ds),
+                            train_rank_loss=run_rank / len(train_ds),
                             sec=time.time() - t0))
         if args.verbose:
             print(f'  ep {epoch:3d} loss {history[-1]["train_loss"]:.4f}', flush=True)
@@ -143,6 +153,12 @@ def main():
     ap.add_argument('--var_margin', type=float, default=0.02,
                     help='--var_beta: target floor for the in-batch per-texture prediction std, on the '
                          'fold-normalised [0,1] target scale')
+    ap.add_argument('--rank_gamma', type=float, default=0.0,
+                    help='pairwise ranking auxiliary loss weight (requires --group_batch) - see '
+                         'test/cv/cv_experiment.py ranking_loss(). 0 = off (default)')
+    ap.add_argument('--rank_margin', type=float, default=0.05,
+                    help='--rank_gamma: required separation (fold-normalised [0,1] scale) between two '
+                         'correctly-ordered textures before the hinge is 0')
     ap.add_argument('--aug', action='store_true', help='image models only (transformer, cnn_1d_simple)')
     ap.add_argument('--cosine', action='store_true')
     ap.add_argument('--warmup', type=int, default=5)
@@ -162,8 +178,9 @@ def main():
     args = ap.parse_args()
     if args.lds and args.group_batch:
         raise SystemExit('--lds and --group_batch are mutually exclusive (both replace the default batch sampler)')
-    if (args.agg_alpha > 0 or args.var_beta > 0) and not args.group_batch:
-        raise SystemExit('--agg_alpha/--var_beta require --group_batch (see test/cv/cv_experiment.py)')
+    if (args.agg_alpha > 0 or args.var_beta > 0 or args.rank_gamma > 0) and not args.group_batch:
+        raise SystemExit('--agg_alpha/--var_beta/--rank_gamma require --group_batch (see '
+                         'test/cv/cv_experiment.py)')
 
     conf = yaml.safe_load(open('config.yaml', encoding='utf-8'))
     conf['model'] = args.model
@@ -189,6 +206,7 @@ def main():
                        (f'_pk{args.group_P}x{args.group_K}' if args.group_batch else '') +
                        (f'_agg{args.agg_alpha:g}' if args.agg_alpha else '') +
                        (f'_var{args.var_beta:g}-{args.var_margin:g}' if args.var_beta else '') +
+                       (f'_rank{args.rank_gamma:g}-{args.rank_margin:g}' if args.rank_gamma else '') +
                        ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else '') +

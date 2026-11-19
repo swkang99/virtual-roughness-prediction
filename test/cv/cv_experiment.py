@@ -40,10 +40,14 @@ Options to address under-fitting / range compression (all OFF by default = paper
     --agg_alpha --var_beta --var_margin   texture-level aggregation loss (L1 of the in-batch grouped mean
                                       vs. the texture label) + anti-variance-collapse regularisation
                                       (penalises in-batch per-texture prediction std below --var_margin) -
-                                      see aggregation_var_loss() below. Both require --group_batch (a
+                                      see aggregation_var_loss() below. Requires --group_batch (a
                                       plain-shuffle batch essentially never has >1 patch of the same
                                       texture, so every "group" would be a singleton and the terms would
                                       silently be near-zero no-ops rather than doing anything).
+    --rank_gamma --rank_margin       pairwise ranking auxiliary loss - margin hinge encouraging correct
+                                      RELATIVE order between different textures' in-batch aggregated
+                                      predictions, even when the absolute scale is compressed - see
+                                      ranking_loss() below. Also requires --group_batch.
     --select {val_rmse,val_tex_mae,val_ccc}
     --aug                            exact dihedral (flip / 90° rotation) augmentation
     --cosine --warmup N              learning-rate schedule
@@ -332,6 +336,63 @@ def check_pk_wiring(tex, P, K, n_groups):
           'groups. PK sampler + aggregation/variance loss are wired correctly.', flush=True)
 
 
+def ranking_loss(pred, y, tex, gamma, margin):
+    """Pairwise ranking auxiliary loss (component C of the "3+4" under-fitting/range-compression
+    strategy - see claude/whc2027_apt_relabeling_strategy.md §13). Where aggregation_var_loss()
+    targets the ABSOLUTE texture-level value, this term only asks the model to get the RELATIVE ORDER
+    between different textures right - useful precisely when the predicted scale is compressed (so the
+    absolute aggregation term is hard to satisfy) but the model could still rank textures correctly.
+
+    pred, y: (N,) 1-D tensors on the fold-normalised [0,1] scale. tex: (N,) texture ids aligned
+    index-for-index with pred/y. Requires --group_batch for the same reason as aggregation_var_loss:
+    without it, a batch drawn from ~100 textures rarely contains more than one distinct texture more
+    than once, so "pairs of textures in this batch" would be a near-empty, unstable sample.
+
+    Each texture group g present in the batch is reduced to one representative value: mean(pred in g),
+    mean(y in g) (same reduction as aggregation_var_loss - group size can be 1, unlike there, since
+    ranking only needs a scalar per texture, not a notion of within-group spread).
+    For every PAIR of groups (i, j) with different labels, a margin ranking hinge is applied:
+        relu(margin - sign(y_i - y_j) * (p_i - p_j))
+    i.e. zero once the model puts i and j in the right order with at least `margin` of separation,
+    growing linearly as it gets the order wrong or the gap is too small. Pairs with y_i == y_j are
+    skipped (no preferred order exists). Averaged over valid pairs, then scaled by gamma.
+
+    Returns (gamma*loss, n_groups, n_pairs); n_pairs == 0 (loss == 0, still differentiable via
+    0*pred.sum()) means fewer than 2 distinct-label groups were present - see check_ranking_wiring(),
+    which treats that as a hard error on the first batch rather than a silent no-op for the whole run.
+    """
+    tex_np = tex.detach().cpu().numpy() if torch.is_tensor(tex) else np.asarray(tex)
+    uniq = np.unique(tex_np)
+    g_pred = torch.stack([pred[np.nonzero(tex_np == t)[0]].mean() for t in uniq])
+    g_y = torch.stack([y[np.nonzero(tex_np == t)[0]].mean() for t in uniq])
+    terms = []
+    for i in range(len(uniq)):
+        for j in range(i + 1, len(uniq)):
+            if g_y[i] == g_y[j]:
+                continue
+            s = torch.sign(g_y[i] - g_y[j])
+            terms.append(torch.clamp(margin - s * (g_pred[i] - g_pred[j]), min=0.0))
+    if not terms:
+        z = pred.sum() * 0.0
+        return z, len(uniq), 0
+    return gamma * torch.stack(terms).mean(), len(uniq), len(terms)
+
+
+def check_ranking_wiring(n_groups, n_pairs, P):
+    """One-time startup safeguard for ranking_loss() (component C), run alongside check_pk_wiring() on
+    the first batch when --rank_gamma is on - same fail-fast-on-the-first-batch philosophy (see
+    check_pk_wiring's docstring); added together with component C on 2026-11-19."""
+    if n_groups < 2:
+        raise RuntimeError(f'[ranking sanity check] only {n_groups} texture group(s) in the first batch - '
+                            f'need >= 2 to form any ranking pair (--group_P={P} too small, or '
+                            '--group_batch actually off?)')
+    if n_pairs == 0:
+        raise RuntimeError('[ranking sanity check] 0 usable ranking pairs in the first batch - every pair '
+                            'of texture groups had an identical label (check --group_P / label values)')
+    print(f'[ranking sanity check] OK - first batch: {n_groups} texture groups, {n_pairs} ranking pairs.',
+          flush=True)
+
+
 def lds_weights(y_norm, bins=50, sigma=2.0):
     """Label Distribution Smoothing (Yang et al., ICML 2021): w ∝ 1/sqrt(smoothed density)."""
     hist, edges = np.histogram(y_norm, bins=bins, range=(float(np.min(y_norm)), float(np.max(y_norm))))
@@ -425,11 +486,12 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
-    aux_on = args.agg_alpha > 0 or args.var_beta > 0
+    agg_var_on, rank_on = (args.agg_alpha > 0 or args.var_beta > 0), args.rank_gamma > 0
+    aux_on = agg_var_on or rank_on
     best, best_state, best_epoch, bad, history, sanity_checked = None, None, -1, 0, [], False
     epoch_bar = tqdm(range(total), desc='train', unit='epoch', leave=False, disable=args.verbose)
     for epoch in epoch_bar:
-        model.train(); t0 = time.time(); run_loss = run_agg = run_var = 0.0
+        model.train(); t0 = time.time(); run_loss = run_agg = run_var = run_rank = 0.0
         for batch in loader:
             *core, w, tex = batch
             inputs, y = prepare_batch_by_model(core, model, device)
@@ -443,13 +505,21 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
             pred = pred.float().view_as(y)
             loss = crit(pred, y, w)
             if aux_on:
-                agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
-                                                               args.agg_alpha, args.var_beta, args.var_margin)
+                agg_l = var_l = rank_l = pred.sum() * 0.0
+                if agg_var_on:
+                    agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
+                                                                   args.agg_alpha, args.var_beta, args.var_margin)
+                if rank_on:
+                    rank_l, n_groups_r, n_pairs = ranking_loss(pred.view(-1), y.view(-1), tex,
+                                                               args.rank_gamma, args.rank_margin)
                 if not sanity_checked:
-                    check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    if agg_var_on:
+                        check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    if rank_on:
+                        check_ranking_wiring(n_groups_r, n_pairs, args.group_P)
                     sanity_checked = True
-                loss = loss + agg_l + var_l
-                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y)
+                loss = loss + agg_l + var_l + rank_l
+                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y); run_rank += rank_l.item() * len(y)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             run_loss += loss.item() * len(y)
         if sched: sched.step()
@@ -460,6 +530,7 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         score = {'val_rmse': m['patch_rmse'], 'val_tex_mae': m['tex_mae'], 'val_ccc': -m['tex_ccc']}[args.select]
         history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds),
                             train_agg_loss=run_agg / len(train_ds), train_var_loss=run_var / len(train_ds),
+                            train_rank_loss=run_rank / len(train_ds),
                             sec=time.time() - t0, **{f'val_{k}': v for k, v in m.items()}))
         if best is None or score < best:
             best, best_epoch, bad = score, epoch, 0
@@ -510,6 +581,13 @@ def main():
     ap.add_argument('--var_margin', type=float, default=0.02,
                     help='--var_beta: target floor for the in-batch per-texture prediction std, on the '
                          'fold-normalised [0,1] target scale')
+    ap.add_argument('--rank_gamma', type=float, default=0.0,
+                    help="pairwise ranking auxiliary loss weight (requires --group_batch): margin hinge "
+                         "on the predicted order of different textures' in-batch aggregated predictions "
+                         "- see ranking_loss(). 0 = off (default). Not yet swept.")
+    ap.add_argument('--rank_margin', type=float, default=0.05,
+                    help='--rank_gamma: required separation (on the fold-normalised [0,1] target scale) '
+                         'between two correctly-ordered textures before the hinge is 0')
     ap.add_argument('--select', choices=['val_rmse', 'val_tex_mae', 'val_ccc'], default='val_rmse')
     ap.add_argument('--aug', action='store_true')
     ap.add_argument('--cosine', action='store_true')
@@ -537,10 +615,11 @@ def main():
     args = ap.parse_args()
     if args.lds and args.group_batch:
         raise SystemExit('--lds and --group_batch are mutually exclusive (both replace the default batch sampler)')
-    if (args.agg_alpha > 0 or args.var_beta > 0) and not args.group_batch:
-        raise SystemExit('--agg_alpha/--var_beta require --group_batch (texture-level aggregation needs '
-                         'batches grouped by texture - see src/data/samplers.py - otherwise every group '
-                         'would be a singleton and the terms would silently be near-zero no-ops)')
+    if (args.agg_alpha > 0 or args.var_beta > 0 or args.rank_gamma > 0) and not args.group_batch:
+        raise SystemExit('--agg_alpha/--var_beta/--rank_gamma require --group_batch (these texture-level '
+                         'auxiliary losses need batches grouped by texture - see src/data/samplers.py - '
+                         'otherwise groups/pairs would be degenerate and the terms would silently be '
+                         'near-zero no-ops)')
 
     conf = yaml.safe_load(open('config.yaml', encoding='utf-8'))
     conf['model'] = args.model
@@ -578,6 +657,7 @@ def main():
                        (f'_pk{args.group_P}x{args.group_K}' if args.group_batch else '') +
                        (f'_agg{args.agg_alpha:g}' if args.agg_alpha else '') +
                        (f'_var{args.var_beta:g}-{args.var_margin:g}' if args.var_beta else '') +
+                       (f'_rank{args.rank_gamma:g}-{args.rank_margin:g}' if args.rank_gamma else '') +
                        ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') + f'_{args.select}' +
                        (f'_in-{args.inputs}' if args.inputs != 'all' else '') + ('_nolsfg' if args.no_lsfg else '') +

@@ -33,17 +33,29 @@
 #                then one table with the baselines, the full model and the ablations (same folds)
 #
 # Environment overrides
-#   RECIPE        training flags of the final recipe (without --aug, which is added for image models)
-#                 default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4" (selected after ablation + mae_screen,
-#                 both DONE - see their notes above; not expected to change again)
+#   RECIPE        training flags of Ours' (transformer) final recipe (without --aug, which is added for
+#                 image models). default: Recipe B "--loss l1 --select val_tex_mae --cosine --lr 3e-4"
+#                 (selected after ablation + mae_screen, both DONE - see their notes above; not expected
+#                 to change again)
 #                 Recipe A (for reference): RECIPE="--select val_ccc --loss mse_ccc --lds --cosine --lr 3e-4" bash run/run_cv.sh final
+#
+# BASELINE RECIPE (2026-11-18, supersedes the §7 "same recipe for every model" decision - see
+# claude/whc2027_apt_relabeling_strategy.md §12): $RECIPE / $AUG / $LAMBDA above apply to the transformer
+# (Ours) ONLY. The other 6 models (lr, svr, ann, cnn_1d_wassem, cnn_1d_scirep, cnn_1d_simple) train with
+# NO recipe overrides (cv_experiment.py's own defaults = loss mse, select val_rmse, no lds/aug/cosine -
+# already "paper setting") and --lambda_ratio 1 (uniform; Tier A' upweighting is Ours' own device, not
+# something the original papers ever had). The paper's new framing is "Ours = architecture + recipe,
+# compared against each baseline's own original method" (decision (b)), not "same recipe, different
+# architecture" - so baselines are no longer asked to run any part of Ours' recipe. cnn_1d_simple has no
+# external paper, but is kept on these literal defaults too rather than growing a bespoke recipe of its own.
 #
 # --lambda_ratio (Tier A':Tier B loss weight, cv_experiment.py) defaults to 16.0, derived analytically from the
 # participant-level rating variance (see whc2027_apt_relabeling_strategy.md, PPT 261109 slide 3/8). 'lambda_sweep'
 # below is a light CV check of that value against its 90% CI bounds {8, 16, 27} - Ours only, repeats=2, no
 # baseline models involved. This is distinct from the holdout comparison across all models (see run/run_holdout.sh):
 # the chosen lambda from here feeds that stage, which trains every model once on the full Tier B+A' pool (no CV)
-# and evaluates once on the Tier A holdout.
+# and evaluates once on the Tier A holdout. Baselines in that stage always use --lambda_ratio 1 regardless
+# of what this sweep picks for Ours (see BASELINE RECIPE note above).
 #   FEATURE_MODE  original (default; Hassan et al. re-implementation, see output/review/WASEEM_CODE_REVIEW.md)
 #                 | legacy (feature pipeline of the earlier results)
 #   INPUT_VARIANTS  map ablations for 'components' (default "texture"; also "texture_height texture_normal")
@@ -78,19 +90,21 @@ mkdir -p "$LOGS" "$OUT"
 run() { echo ">>> python -m test.cv.cv_experiment $*"; python -m test.cv.cv_experiment "$@"; }
 tag() { python -m test.cv.cv_experiment $COMMON "$@" --print_tag; }   # run-folder name for a set of flags
 paper_runs() {                                      # paper-setting run folders of all models for one protocol
-  local p=$1 out=""
-  for m in $MODELS; do out+="$(tag --model "$m" --protocol "$p") "; done
+  local p=$1 out=""                                  # --lambda_ratio 1: uniform loss, the actual paper setting
+  for m in $MODELS; do out+="$(tag --model "$m" --protocol "$p" --lambda_ratio 1) "; done
   echo "$out"
 }
 compare() { python -m test.cv.cv_compare "$OUT" --feature_mode "$FEATURE_MODE" "$@"; }
 
 if [[ $stage == compare || $stage == all ]]; then
-  # Paper setting (MSE, Adam, best val RMSE) for every model; identical folds/seeds across models.
+  # Paper setting (MSE, Adam, best val RMSE, uniform loss) for every model; identical folds/seeds across
+  # models. --lambda_ratio 1 is required here (not just the implicit cv_experiment.py default, which is
+  # 16.0) - see the BASELINE RECIPE note above and cv_compare.py's "paper setting" check.
   n_models=$(wc -w <<< "$MODELS"); i=0
   for m in $MODELS; do
     i=$((i + 1))
     echo "=== [compare $i/$n_models] model=$m ==="
-    run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 2>&1 | tee -a "$LOGS/cv_${m}.log"
+    run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 --lambda_ratio 1 2>&1 | tee -a "$LOGS/cv_${m}.log"
   done
   compare --protocol cv --ref transformer | tee "$OUT/COMPARE_cv.md"
 fi
@@ -168,27 +182,35 @@ if [[ $stage == lambda_sweep ]]; then
 fi
 
 if [[ $stage == tune_epochs ]]; then
-  # Picks each model's own best_epoch under RECIPE + the chosen LAMBDA (same selection rule - val_tex_mae
-  # - for every model; only the resulting epoch COUNT differs, nothing else in RECIPE does - see the
-  # fairness discussion in run/run_holdout.sh's module docstring). LR/SVR have no epoch concept and are skipped.
+  # Ours (transformer): best_epoch under RECIPE + the chosen LAMBDA, criterion val_tex_mae (unchanged).
+  # The 6 baselines (2026-11-18, see BASELINE RECIPE note above): NO recipe override, NO augmentation,
+  # --lambda_ratio 1 - each picks its own best_epoch under its own paper-setting training (loss mse,
+  # criterion val_rmse, cv_experiment.py's defaults). LR/SVR have no epoch concept and are skipped.
   # Light CV only (TUNE_REPEATS, default 2): this is hyperparameter selection, not a model comparison.
   PAIRS=""
   n_models=$(wc -w <<< "$MODELS"); i=0
   for m in $MODELS; do
     i=$((i + 1))
     [[ "$m" == "lr" || "$m" == "svr" ]] && continue
-    AUG=""; [[ "$m" == "transformer" || "$m" == "cnn_1d_simple" ]] && AUG="--aug"
+    if [[ "$m" == "transformer" ]]; then
+      MRECIPE="$RECIPE"; MAUG="--aug"; MLAMBDA="$LAMBDA"
+    else
+      MRECIPE=""; MAUG=""; MLAMBDA="1"
+    fi
     echo "=== [tune_epochs $i/$n_models] model=$m ==="
-    run --model "$m" $COMMON --protocol cv --k 5 --repeats "$TUNE_REPEATS" $RECIPE $AUG --lambda_ratio "$LAMBDA" \
+    run --model "$m" $COMMON --protocol cv --k 5 --repeats "$TUNE_REPEATS" $MRECIPE $MAUG --lambda_ratio "$MLAMBDA" \
       2>&1 | tee -a "$LOGS/tune_${m}.log"
-    t=$(tag --model "$m" --protocol cv --k 5 $RECIPE $AUG --lambda_ratio "$LAMBDA")
+    t=$(tag --model "$m" --protocol cv --k 5 $MRECIPE $MAUG --lambda_ratio "$MLAMBDA")
     PAIRS+="$m:$t "
   done
   python -m test.pick.pick_epochs "$OUT" --pairs $PAIRS | tee "$OUT/EPOCHS_SELECTED.md"
 fi
 
 if [[ $stage == fairness ]]; then
-  # supplementary only: are the recipe gains specific to the transformer? (reference implementations stay the main baselines)
+  # Supplementary / Discussion-only side-analysis (2026-11-18: no longer part of the main Method claim,
+  # since baselines now run their own original recipe by design - see BASELINE RECIPE note above).
+  # Kept only to answer "would Ours' recipe also help a baseline architecture?" if a reviewer asks;
+  # NOT used for the headline comparison tables.
   FINAL_CV=$(tag --model transformer --protocol cv --k 5 $RECIPE --aug)
   FAIR=""
   for m in ann cnn_1d_wassem; do                    # feature-vector inputs: augmentation not applicable

@@ -32,12 +32,14 @@ from tqdm import tqdm
 from src.data.dataframe import build_tier_dataframe
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import MODEL_DATASET_TYPE
+from src.data.samplers import TextureGroupedBatchSampler
 from src.model.factory import create_model
 from src.trainer import prepare_batch_by_model, forward_by_model, is_torch_model
 from src.model.feature.feature_extractor import GLCM_SLICE
 from test.cv.cv_experiment import (
     ColumnMinMax, TierWeighted, build_train_pool_dataframes, build_concat_base, base_features,
     set_seed, predict, metrics, make_criterion, dihedral_aug, lds_weights,
+    aggregation_var_loss, check_pk_wiring,
 )
 
 
@@ -53,7 +55,7 @@ def build_tier_a_dataframe(conf, data_root=None):
     return df.reset_index(drop=True)
 
 
-def train_full(model, train_ds, args, device, weight_tr=None):
+def train_full(model, train_ds, args, device, weight_tr=None, train_tex=None):
     """Train for the full --epochs with no validation split and no early stopping (see module docstring).
     Returns the model with its FINAL-epoch weights (there is no "best" checkpoint to pick here)."""
     crit = make_criterion(args.loss)
@@ -67,9 +69,14 @@ def train_full(model, train_ds, args, device, weight_tr=None):
 
     if weight_tr is None:
         weight_tr = np.ones(len(train_ds), dtype=np.float32)
-    train_ds = TierWeighted(train_ds, weight_tr)
+    train_ds = TierWeighted(train_ds, weight_tr, train_tex)
 
-    if args.lds:
+    if args.group_batch:
+        if train_tex is None:
+            raise ValueError('train_full(): --group_batch requires train_tex (per-sample texture ids)')
+        batch_sampler = TextureGroupedBatchSampler(train_tex, args.group_P, args.group_K)
+        loader = DataLoader(train_ds, batch_sampler=batch_sampler)
+    elif args.lds:
         y_tr = train_ds._y if hasattr(train_ds, '_y') else np.array([train_ds[i][-2].item() for i in range(len(train_ds))])
         w_lds = lds_weights(y_tr)
         loader = DataLoader(train_ds, batch_size=args.batch_size,
@@ -78,12 +85,13 @@ def train_full(model, train_ds, args, device, weight_tr=None):
         loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
-    history = []
+    aux_on = args.agg_alpha > 0 or args.var_beta > 0
+    history, sanity_checked = [], False
     epoch_bar = tqdm(range(args.epochs), desc='train (full pool, no val split)', unit='epoch', disable=args.verbose)
     for epoch in epoch_bar:
-        model.train(); t0 = time.time(); run_loss = 0.0
+        model.train(); t0 = time.time(); run_loss = run_agg = run_var = 0.0
         for batch in loader:
-            *core, w = batch
+            *core, w, tex = batch
             inputs, y = prepare_batch_by_model(core, model, device)
             w = w.to(device)
             if args.aug and isinstance(inputs, tuple) and len(inputs) == 3 and inputs[0].dim() == 4:
@@ -93,10 +101,20 @@ def train_full(model, train_ds, args, device, weight_tr=None):
                 pred = forward_by_model(model, inputs)
             pred = pred.float().view_as(y)
             loss = crit(pred, y, w)
+            if aux_on:
+                agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
+                                                               args.agg_alpha, args.var_beta, args.var_margin)
+                if not sanity_checked:
+                    check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    sanity_checked = True
+                loss = loss + agg_l + var_l
+                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             run_loss += loss.item() * len(y)
         if sched: sched.step()
-        history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds), sec=time.time() - t0))
+        history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds),
+                            train_agg_loss=run_agg / len(train_ds), train_var_loss=run_var / len(train_ds),
+                            sec=time.time() - t0))
         if args.verbose:
             print(f'  ep {epoch:3d} loss {history[-1]["train_loss"]:.4f}', flush=True)
         epoch_bar.set_postfix(loss=f'{history[-1]["train_loss"]:.4f}')
@@ -113,6 +131,18 @@ def main():
     ap.add_argument('--weight_decay', type=float, default=None)
     ap.add_argument('--loss', choices=['mse', 'huber', 'l1', 'ccc', 'mse_ccc'], default='l1')
     ap.add_argument('--lds', action='store_true')
+    ap.add_argument('--group_batch', action='store_true', help='see test/cv/cv_experiment.py / src/data/samplers.py')
+    ap.add_argument('--group_P', type=int, default=8)
+    ap.add_argument('--group_K', type=int, default=7)
+    ap.add_argument('--agg_alpha', type=float, default=0.0,
+                    help='texture-level aggregation loss weight (requires --group_batch) - see '
+                         'test/cv/cv_experiment.py aggregation_var_loss(). 0 = off (default)')
+    ap.add_argument('--var_beta', type=float, default=0.0,
+                    help='anti-variance-collapse regularisation weight (requires --group_batch). '
+                         '0 = off (default)')
+    ap.add_argument('--var_margin', type=float, default=0.02,
+                    help='--var_beta: target floor for the in-batch per-texture prediction std, on the '
+                         'fold-normalised [0,1] target scale')
     ap.add_argument('--aug', action='store_true', help='image models only (transformer, cnn_1d_simple)')
     ap.add_argument('--cosine', action='store_true')
     ap.add_argument('--warmup', type=int, default=5)
@@ -130,6 +160,10 @@ def main():
     ap.add_argument('--max_patches', type=int, default=None, help='smoke test only')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
+    if args.lds and args.group_batch:
+        raise SystemExit('--lds and --group_batch are mutually exclusive (both replace the default batch sampler)')
+    if (args.agg_alpha > 0 or args.var_beta > 0) and not args.group_batch:
+        raise SystemExit('--agg_alpha/--var_beta require --group_batch (see test/cv/cv_experiment.py)')
 
     conf = yaml.safe_load(open('config.yaml', encoding='utf-8'))
     conf['model'] = args.model
@@ -151,7 +185,11 @@ def main():
     # test/cv/cv_experiment.py's tag() for why omitting it at the default is unsafe: the skip check right
     # below (pred.csv exists -> skip) never inspects the args that produced it, so a run from before tier
     # weighting existed could otherwise silently alias with a real lambda_ratio=16.0 run.
-    tag = args.tag or (f'{args.model}_holdout_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
+    tag = args.tag or (f'{args.model}_holdout_{args.loss}' + ('_lds' if args.lds else '') +
+                       (f'_pk{args.group_P}x{args.group_K}' if args.group_batch else '') +
+                       (f'_agg{args.agg_alpha:g}' if args.agg_alpha else '') +
+                       (f'_var{args.var_beta:g}-{args.var_margin:g}' if args.var_beta else '') +
+                       ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else '') +
                        f'_lr{args.lambda_ratio:g}')
@@ -195,7 +233,7 @@ def main():
     t0 = time.time()
     model = create_model(conf, input_dim=input_dim, device=device)
     if is_torch_model(model):
-        model, hist = train_full(model, ds_tr, args, device, weight_tr=w_tr)
+        model, hist = train_full(model, ds_tr, args, device, weight_tr=w_tr, train_tex=all_df.texture.values[keep])
         pd.DataFrame(hist).to_csv(out / 'train_history.csv', index=False)
         p, g = predict(model, ds_te, device, args.batch_size, args.amp)
         ptr, gtr = predict(model, ds_tr, device, args.batch_size, args.amp)

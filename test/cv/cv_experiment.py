@@ -61,6 +61,26 @@ Options to address under-fitting / range compression (all OFF by default = paper
                                       sample was weighted 1.0 unconditionally) can never be silently
                                       reused as if it were a real lambda_ratio=16.0 run: the two used
                                       genuinely different training objectives despite the same number.
+    --eval_tier_a                    Reuse each fold model's Tier A (8 native APT textures) predictions as
+                                      a repeated confirmatory-evaluation sample (strategy doc §18.1 "role
+                                      1"), instead of the old design of training one extra full-pool model
+                                      and evaluating it once (test/holdout/holdout_eval.py - still the
+                                      separate "role 2" deployment/User-Study model, unaffected by this
+                                      flag). Each of the 5*repeats fold models predicts on Tier A using
+                                      that FOLD's own train-fold normalisation / ColumnMinMax / input-
+                                      ablation stats (same transforms already applied to that fold's test
+                                      split) - Tier A itself never influences training, fold construction,
+                                      or model selection in any way; it is only predicted on, after the
+                                      fact, with an already-fixed model. Writes one extra
+                                      `rep{R}_fold{F}_pred_tierA.csv` per fold (same schema as the normal
+                                      `..._pred.csv`) and an extra `tier_a` metrics block in that fold's
+                                      meta.json.
+                                      *** ONLY turn this on for the single, final CV run after the recipe
+                                      (model + all hyperparameters) is 100% locked. Turning it on during
+                                      recipe/hyperparameter exploration (screening, sweeps, ablations)
+                                      re-introduces exactly the Tier A leakage §9/§10.3 are designed to
+                                      prevent - Tier A results would then be visible while still picking
+                                      the recipe, even though no single model is retrained on Tier A. ***
 
 Usage (from repository root):
     python -m test.cv.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
@@ -78,7 +98,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
-from src.data.dataframe import build_tier_dataframe
+from src.data.dataframe import build_tier_dataframe, build_tier_a_dataframe
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
 from src.data.samplers import TextureGroupedBatchSampler
@@ -597,6 +617,14 @@ def main():
                     help="lambda_A':lambda_B tier loss-weight ratio (default 16.0, the participant-level-"
                          "variance recalculation; see the lambda-validation slide / strategy doc §4). "
                          "R=1.0 recovers the old unweighted (uniform) loss.")
+    ap.add_argument('--eval_tier_a', action='store_true',
+                    help="ALSO predict each fold model on Tier A (8 native APT textures) and save "
+                         "rep{R}_fold{F}_pred_tierA.csv (strategy doc §18.1, 'role 1' repeated "
+                         "confirmatory-evaluation sample). Tier A never affects training/fold-building/"
+                         "model-selection either way - this only adds a post-hoc prediction pass with the "
+                         "already-fixed fold model. ONLY for the single final CV run once the recipe is "
+                         "100% locked - never during recipe/hyperparameter exploration (see help text "
+                         "above / module docstring - this would reintroduce the §9/§10.3 leakage).")
     ap.add_argument('--tag', default=None)
     ap.add_argument('--out', default='output/results_cv', help='output/ is git-ignored')
     ap.add_argument('--data_root', default=None, help='override data_tier_root, e.g. data/trustworthy')
@@ -677,12 +705,30 @@ def main():
           f'lambda_ratio={args.lambda_ratio:g}')
     feats = base_features(base) if args.feature_mode == 'original' else None
 
+    if args.eval_tier_a:
+        # Tier A loaded ONCE, outside the fold loop (it is the same 8 textures for every fold/repeat) -
+        # see strategy doc §18.1 "role 1". It never enters build_train_pool_dataframes()/build_concat_base()
+        # above, never contributes to make_folds()/the train-val-test split, and never affects model
+        # selection: each fold model below only predicts on it, after the fact, using that fold's own
+        # train-fold-fit normalisation/transforms (see inside the loop).
+        print('[WARNING] --eval_tier_a is ON: every fold model below will ALSO be evaluated on Tier A. '
+              'This is only valid for the single final CV run once the recipe is 100% locked (strategy '
+              'doc §18.1) - re-running this during recipe/hyperparameter exploration would reintroduce '
+              'the exact Tier A leakage §9/§10.3 are designed to prevent.', flush=True)
+        df_a = build_tier_a_dataframe(conf, args.data_root)
+        base_a, all_df_a, input_dim_a, keep_a = build_concat_base(conf, {'A': df_a}, device, args.max_patches)
+        print(f'[data] Tier A (role-1 repeated-eval sample): {all_df_a.texture.nunique()} textures, '
+              f'{len(keep_a)} patches', flush=True)
+
     for r in tqdm(range(args.start_repeat, args.repeats), desc='CV repeats', unit='repeat'):
         seed = args.base_seed + r
         folds = make_folds(all_df, args.protocol, args.k, args.n_val, seed)
         for f, (tr_t, va_t, te_t) in enumerate(tqdm(folds[:args.max_folds], desc=f'repeat {r} folds', unit='fold', leave=False)):
             run_name = f'rep{r:02d}_fold{f}'
-            if (out / f'{run_name}_pred.csv').exists():
+            done = (out / f'{run_name}_pred.csv').exists()
+            if args.eval_tier_a:
+                done = done and (out / f'{run_name}_pred_tierA.csv').exists()
+            if done:
                 print(f'[skip] {run_name} already done'); continue
             set_seed(seed * 100 + f)
             sel = lambda ts: keep[np.isin(all_df.texture.values[keep], ts)]
@@ -707,6 +753,18 @@ def main():
                 ds_tr, ds_va, ds_te = (InputAblation(d, kh, kn) for d in (ds_tr, ds_va, ds_te))
                 ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
 
+            ds_a = None
+            if args.eval_tier_a:
+                # Tier A predicted with THIS fold's own train-fold-fit normalisation (y_min/y_max) and
+                # transforms (ColumnMinMax cols/lo/hi, InputAblation kh/kn - all already fit above on the
+                # train fold only, same objects reused for ds_te) - Tier A contributes nothing to any of
+                # those fits, only receives them.
+                ds_a = NormalizedSubset(base_a, keep_a, y_min, y_max)
+                if args.feature_mode == 'original':
+                    ds_a = ColumnMinMax(ds_a, cols, lo, hi)
+                if args.inputs != 'all':
+                    ds_a = InputAblation(ds_a, kh, kn)
+
             t0 = time.time()
             model = create_model(conf, input_dim=input_dim, device=device)
             if args.no_lsfg:                                         # equal, fixed fusion weights
@@ -720,17 +778,38 @@ def main():
                 pd.DataFrame(hist).to_csv(out / f'{run_name}_history.csv', index=False)
                 p, g = predict(model, ds_te, device, args.batch_size, args.amp)
                 ptr, gtr = predict(model, ds_tr, device, args.batch_size, args.amp)
+                if args.eval_tier_a:
+                    p_a, g_a = predict(model, ds_a, device, args.batch_size, args.amp)
             else:                                                     # sklearn models (lr, svr)
                 X, yy = dataset_to_numpy(ds_tr); model.fit(X, yy, sample_weight=w_tr); best_epoch = -1
                 Xt, g = dataset_to_numpy(ds_te); p = np.asarray(model.predict(Xt)).ravel()
                 ptr = np.asarray(model.predict(X)).ravel(); gtr = yy
+                if args.eval_tier_a:
+                    Xa, g_a = dataset_to_numpy(ds_a); p_a = np.asarray(model.predict(Xa)).ravel()
             den = lambda v: v * (y_max - y_min + 1e-8) + y_min
             p, g, ptr, gtr = den(p), den(g), den(ptr), den(gtr)
+            if args.eval_tier_a:
+                p_a, g_a = den(p_a), den(g_a)
 
             pred_df = pd.DataFrame({'image_id': all_df.image_id.values[i_te], 'texture': all_df.texture.values[i_te],
                                     'tier': all_df.tier.values[i_te], 'gt': g, 'pred': p,
                                     'repeat': r, 'fold': f})
             pred_df.to_csv(out / f'{run_name}_pred.csv', index=False)
+            tier_a_meta = None
+            if args.eval_tier_a:
+                # Role 1 (§18.1): this fold model's Tier A predictions, saved alongside the normal OOF
+                # pred.csv. Aggregating these across all 5*repeats fold files into the repeated-evaluation
+                # sample (per-repeat texture-level pooling, then mean±SD across repeats) is done by
+                # test/cv/tier_a_confirm.py. Filename is "..._pred_tierA.csv", NOT "..._tierA_pred.csv":
+                # test/cv/cv_aggregate.py's own OOF summary globs '*_pred.csv', which would otherwise
+                # silently also pick up this file (wrong texture ids, wrong fold membership) - the
+                # "_pred" suffix must not be the last 9 characters of the filename.
+                pred_df_a = pd.DataFrame({'image_id': all_df_a.image_id.values[keep_a],
+                                          'texture': all_df_a.texture.values[keep_a],
+                                          'tier': all_df_a.tier.values[keep_a], 'gt': g_a, 'pred': p_a,
+                                          'repeat': r, 'fold': f})
+                pred_df_a.to_csv(out / f'{run_name}_pred_tierA.csv', index=False)
+                tier_a_meta = metrics(p_a, g_a, all_df_a.texture.values[keep_a])
             lsfg = ([round(float(v), 4) for v in model.get_lsfg_weights().cpu()]
                     if hasattr(model, 'get_lsfg_weights') else None)    # learned [texture, height, normal] weights
             meta = dict(repeat=r, fold=f, seed=seed, best_epoch=int(best_epoch), minutes=(time.time() - t0) / 60,
@@ -738,10 +817,12 @@ def main():
                         n_train_tex=len(tr_t), n_val_tex=len(va_t), n_test_tex=len(te_t),
                         test=metrics(p, g, all_df.texture.values[i_te]),
                         train=metrics(ptr, gtr, all_df.texture.values[i_tr]),
-                        test_textures=[int(t) for t in te_t], val_textures=[int(t) for t in va_t])
+                        test_textures=[int(t) for t in te_t], val_textures=[int(t) for t in va_t],
+                        tier_a=tier_a_meta)
             json.dump(meta, open(out / f'{run_name}_meta.json', 'w'), indent=1)
+            tier_a_log = f' | tierA texMAE={tier_a_meta["tex_mae"]:.2f}' if tier_a_meta else ''
             print(f'[{run_name}] best_epoch={best_epoch} test texMAE={meta["test"]["tex_mae"]:.2f} '
-                  f'patchMAE={meta["test"]["patch_mae"]:.2f} slope={meta["test"]["tex_slope"]:.2f} | '
+                  f'patchMAE={meta["test"]["patch_mae"]:.2f} slope={meta["test"]["tex_slope"]:.2f}{tier_a_log} | '
                   f'train texMAE={meta["train"]["tex_mae"]:.2f} slope={meta["train"]["tex_slope"]:.2f} '
                   f'({meta["minutes"]:.1f} min)', flush=True)
 

@@ -55,3 +55,24 @@ def build_tier_dataframe(tier_dir, label_csv_path, tier_name=None):
         })
 
     return pd.DataFrame(rows)
+
+
+def build_tier_a_dataframe(conf, data_root=None):
+    """Tier A (8 native APT textures, string ids 'A1'..'A8') - never part of the Tier B / Tier A' train
+    pool (see build_tier_dataframe() above / claude/whc2027_apt_relabeling_strategy.md §4). Unlike
+    Tier B / Tier A', ids are NOT cast to int.
+
+    Shared by two consumers (see §18.1 of the strategy doc):
+      - test/holdout/holdout_eval.py (role 2): the single full-pool model's one-shot Tier A evaluation.
+      - test/cv/cv_experiment.py's --eval_tier_a (role 1): each CV fold model's Tier A predictions,
+        reused (never retrained) as the repeated-evaluation sample for the confirmatory statistical
+        tests, once the recipe is 100% locked. This function itself does not care which caller is
+        using it; it is identical "load Tier A" logic either way, moved here (2026-11-25) so both
+        callers share one implementation instead of cv_experiment.py reimplementing holdout_eval.py's.
+    """
+    tier_root = Path(data_root) if data_root else Path(conf.get('data_tier_root', 'data/trustworthy'))
+    tier_dir = tier_root / 'Tier A'
+    df = build_tier_dataframe(tier_dir, tier_dir / 'Tier A.csv', tier_name='A')
+    df['image_id'] = df['texture_path'].map(lambda p: Path(p).stem)
+    df['patch_idx'] = df['image_id'].map(lambda s: int(s.split('_')[-1]))
+    return df.reset_index(drop=True)

@@ -34,6 +34,20 @@ Protocol (default: --protocol cv --k 5 --repeats 10)
 Options to address under-fitting / range compression (all OFF by default = paper setting):
     --loss {mse,huber,ccc,mse_ccc}   CCC = concordance correlation coefficient loss
     --lds                            label-distribution-smoothing re-weighting
+    --group_batch --group_P --group_K   PK batch sampler (see src/data/samplers.py) - prerequisite for a
+                                      texture-level aggregation/ranking auxiliary loss; mutually exclusive
+                                      with --lds (both replace the default shuffled sampler)
+    --agg_alpha --var_beta --var_margin   texture-level aggregation loss (L1 of the in-batch grouped mean
+                                      vs. the texture label) + anti-variance-collapse regularisation
+                                      (penalises in-batch per-texture prediction std below --var_margin) -
+                                      see aggregation_var_loss() below. Requires --group_batch (a
+                                      plain-shuffle batch essentially never has >1 patch of the same
+                                      texture, so every "group" would be a singleton and the terms would
+                                      silently be near-zero no-ops rather than doing anything).
+    --rank_gamma --rank_margin       pairwise ranking auxiliary loss - margin hinge encouraging correct
+                                      RELATIVE order between different textures' in-batch aggregated
+                                      predictions, even when the absolute scale is compressed - see
+                                      ranking_loss() below. Also requires --group_batch.
     --select {val_rmse,val_tex_mae,val_ccc}
     --aug                            exact dihedral (flip / 90° rotation) augmentation
     --cosine --warmup N              learning-rate schedule
@@ -41,7 +55,32 @@ Options to address under-fitting / range compression (all OFF by default = paper
     --lambda_ratio R                 lambda_A':lambda_B tier loss-weight ratio (default 16.0,
                                       the participant-level-variance recalculation; see the
                                       lambda-validation slide / strategy doc §4). R=1.0 recovers
-                                      the old unweighted (uniform) loss.
+                                      the old unweighted (uniform) loss. ALWAYS encoded in the run
+                                      tag (see tag() below) - never omitted, even at the default -
+                                      so a pre-tier-weighting run (from before 2026-10-30, when every
+                                      sample was weighted 1.0 unconditionally) can never be silently
+                                      reused as if it were a real lambda_ratio=16.0 run: the two used
+                                      genuinely different training objectives despite the same number.
+    --eval_tier_a                    Reuse each fold model's Tier A (8 native APT textures) predictions as
+                                      a repeated confirmatory-evaluation sample (strategy doc §18.1 "role
+                                      1"), instead of the old design of training one extra full-pool model
+                                      and evaluating it once (test/holdout/holdout_eval.py - still the
+                                      separate "role 2" deployment/User-Study model, unaffected by this
+                                      flag). Each of the 5*repeats fold models predicts on Tier A using
+                                      that FOLD's own train-fold normalisation / ColumnMinMax / input-
+                                      ablation stats (same transforms already applied to that fold's test
+                                      split) - Tier A itself never influences training, fold construction,
+                                      or model selection in any way; it is only predicted on, after the
+                                      fact, with an already-fixed model. Writes one extra
+                                      `rep{R}_fold{F}_pred_tierA.csv` per fold (same schema as the normal
+                                      `..._pred.csv`) and an extra `tier_a` metrics block in that fold's
+                                      meta.json.
+                                      *** ONLY turn this on for the single, final CV run after the recipe
+                                      (model + all hyperparameters) is 100% locked. Turning it on during
+                                      recipe/hyperparameter exploration (screening, sweeps, ablations)
+                                      re-introduces exactly the Tier A leakage §9/§10.3 are designed to
+                                      prevent - Tier A results would then be visible while still picking
+                                      the recipe, even though no single model is retrained on Tier A. ***
 
 Usage (from repository root):
     python -m test.cv.cv_experiment --model transformer --protocol cv --k 5 --repeats 10 --patience 40 --amp
@@ -57,10 +96,12 @@ import torch.nn as nn
 import yaml
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
+from tqdm import tqdm
 
-from src.data.dataframe import build_tier_dataframe
+from src.data.dataframe import build_tier_dataframe, build_tier_a_dataframe
 from src.data.dataset import NormalizedSubset, dataset_to_numpy
 from src.data.factory import build_base_dataset, MODEL_DATASET_TYPE
+from src.data.samplers import TextureGroupedBatchSampler
 from src.model.factory import create_model
 from src.trainer import prepare_batch_by_model, forward_by_model, is_torch_model
 from src.model.feature.feature_extractor import GLCM_SLICE
@@ -114,13 +155,19 @@ class InputAblation(torch.utils.data.Dataset):
 
 
 class TierWeighted(torch.utils.data.Dataset):
-    """Wrap a dataset so each item also carries its per-sample Tier loss weight as the last element.
-    Implements L = lambda_B*L_B + lambda_A'*L_A' (see --lambda_ratio) as a per-sample weight that
-    make_criterion()'s weighted mean then applies; propagates the '_y' convenience attribute some
-    callers (--lds) read off the wrapped dataset directly."""
-    def __init__(self, subset, weight):
+    """Wrap a dataset so each item also carries its per-sample Tier loss weight and texture id as the
+    last two elements. The weight implements L = lambda_B*L_B + lambda_A'*L_A' (see --lambda_ratio),
+    applied in make_criterion()'s weighted mean. The texture id is needed by aggregation_var_loss() to
+    tell, within a batch, which samples belong to the same texture - only meaningful when the batch
+    itself is texture-grouped (--group_batch, see src/data/samplers.py); texture_ids defaults to all
+    zeros when not given (--agg_alpha/--var_beta are off in that case, so the id is never read).
+    Propagates the '_y' convenience attribute some callers (--lds) read off the wrapped dataset
+    directly."""
+    def __init__(self, subset, weight, texture_ids=None):
         self.subset = subset
         self.weight = torch.as_tensor(weight, dtype=torch.float32)
+        self.tex = (torch.as_tensor(np.asarray(texture_ids), dtype=torch.long) if texture_ids is not None
+                    else torch.zeros(len(self.weight), dtype=torch.long))
         if hasattr(subset, '_y'):
             self._y = subset._y
 
@@ -131,7 +178,7 @@ class TierWeighted(torch.utils.data.Dataset):
         sample = self.subset[i]
         if not isinstance(sample, (tuple, list)):
             sample = (sample,)
-        return (*sample, self.weight[i])
+        return (*sample, self.weight[i], self.tex[i])
 
 
 def base_features(base):
@@ -241,6 +288,131 @@ def make_criterion(name):
     return crit
 
 
+def aggregation_var_loss(pred, y, tex, alpha, beta, margin):
+    """Texture-level aggregation loss + anti-variance-collapse regularisation (component B of the
+    "3+4" under-fitting/range-compression strategy - see claude/whc2027_apt_relabeling_strategy.md,
+    requires --group_batch so that each texture appearing in the batch contributes exactly --group_K
+    patches; see src/data/samplers.py).
+
+    pred, y: (N,) 1-D tensors on the fold-normalised [0,1] target scale. tex: (N,) texture ids aligned
+    index-for-index with pred/y (any dtype np.unique can hash - the batch's TierWeighted-carried id).
+
+    For every texture group present (patches of one batch sharing the same tex id):
+      aggregation term = |mean(pred in group) - mean(y in group)|   (y is constant within a texture,
+                          so this is really |grouped mean prediction - the texture's single label|;
+                          using the group's own mean for y rather than y[0] costs nothing and is safe
+                          if that invariant is ever violated)
+      variance term     = relu(margin - std(pred in group))         (penalises the model collapsing a
+                          texture's K patch predictions to (near-)identical values, which would trivially
+                          satisfy the aggregation term above without the model actually discriminating
+                          between patches - the diagnosed range-compression failure mode)
+    Both terms are averaged over groups, then scaled by alpha / beta respectively. A group of size 1
+    (should not occur under --group_batch, but handled defensively) is skipped: its aggregation term
+    duplicates the main per-sample loss and its variance is degenerate (undefined / always 0).
+
+    Returns (alpha*agg, beta*var, n_groups) as 0-d tensors; n_groups == 0 (both terms exactly 0, but
+    still differentiable 0*pred.sum() so autograd never complains) means no usable group was found in
+    this batch - see check_pk_wiring(), which treats that as a hard error on the first batch rather
+    than a silent no-op for the whole run.
+    """
+    tex_np = tex.detach().cpu().numpy() if torch.is_tensor(tex) else np.asarray(tex)
+    agg_terms, var_terms = [], []
+    for t in np.unique(tex_np):
+        idx = np.nonzero(tex_np == t)[0]
+        if len(idx) < 2:
+            continue
+        g_pred, g_y = pred[idx], y[idx]
+        agg_terms.append((g_pred.mean() - g_y.mean()).abs())
+        var_terms.append(torch.clamp(margin - g_pred.float().std(unbiased=False), min=0.0))
+    if not agg_terms:
+        z = pred.sum() * 0.0
+        return z, z, 0
+    return alpha * torch.stack(agg_terms).mean(), beta * torch.stack(var_terms).mean(), len(agg_terms)
+
+
+def check_pk_wiring(tex, P, K, n_groups):
+    """One-time startup safeguard (call on the FIRST training batch only, when --agg_alpha/--var_beta
+    is on): verifies the PK sampler (src/data/samplers.py) and aggregation_var_loss() are actually wired
+    together correctly, and fails fast and loudly - within seconds, not hours into a run - instead of
+    silently training on a broken or no-op auxiliary loss. Added 2026-11-19 after local RTX 5080
+    validation runs were abandoned (repeated unrelated CUDA crashes made that GPU unusable for
+    verification - see claude/whc2027_apt_relabeling_strategy.md); this replaces a full local
+    regression run as the server-side check that each new mechanism ("device") is actually active
+    before trusting the real training job's results."""
+    tex_np = tex.detach().cpu().numpy() if torch.is_tensor(tex) else np.asarray(tex)
+    uniq, counts = np.unique(tex_np, return_counts=True)
+    if len(uniq) > P:
+        raise RuntimeError(f'[PK sanity check] batch has {len(uniq)} distinct textures, expected <= '
+                            f'--group_P={P} - --group_batch is not actually controlling this loader '
+                            '(falling back to a plain shuffle somewhere?)')
+    if not np.all(counts == K):
+        raise RuntimeError(f'[PK sanity check] texture group sizes in the batch are {sorted(counts.tolist())}, '
+                            f'not all --group_K={K} - aggregation_var_loss() would be computed over bogus groups')
+    if n_groups == 0:
+        raise RuntimeError('[PK sanity check] aggregation_var_loss() found 0 usable texture groups in the '
+                            "first batch - texture ids are not reaching the loss (TierWeighted's texture_ids "
+                            'not passed through, or --group_batch is actually off?)')
+    print(f'[PK sanity check] OK - first batch: {len(uniq)} textures x {K} patches, {n_groups} aggregation '
+          'groups. PK sampler + aggregation/variance loss are wired correctly.', flush=True)
+
+
+def ranking_loss(pred, y, tex, gamma, margin):
+    """Pairwise ranking auxiliary loss (component C of the "3+4" under-fitting/range-compression
+    strategy - see claude/whc2027_apt_relabeling_strategy.md §13). Where aggregation_var_loss()
+    targets the ABSOLUTE texture-level value, this term only asks the model to get the RELATIVE ORDER
+    between different textures right - useful precisely when the predicted scale is compressed (so the
+    absolute aggregation term is hard to satisfy) but the model could still rank textures correctly.
+
+    pred, y: (N,) 1-D tensors on the fold-normalised [0,1] scale. tex: (N,) texture ids aligned
+    index-for-index with pred/y. Requires --group_batch for the same reason as aggregation_var_loss:
+    without it, a batch drawn from ~100 textures rarely contains more than one distinct texture more
+    than once, so "pairs of textures in this batch" would be a near-empty, unstable sample.
+
+    Each texture group g present in the batch is reduced to one representative value: mean(pred in g),
+    mean(y in g) (same reduction as aggregation_var_loss - group size can be 1, unlike there, since
+    ranking only needs a scalar per texture, not a notion of within-group spread).
+    For every PAIR of groups (i, j) with different labels, a margin ranking hinge is applied:
+        relu(margin - sign(y_i - y_j) * (p_i - p_j))
+    i.e. zero once the model puts i and j in the right order with at least `margin` of separation,
+    growing linearly as it gets the order wrong or the gap is too small. Pairs with y_i == y_j are
+    skipped (no preferred order exists). Averaged over valid pairs, then scaled by gamma.
+
+    Returns (gamma*loss, n_groups, n_pairs); n_pairs == 0 (loss == 0, still differentiable via
+    0*pred.sum()) means fewer than 2 distinct-label groups were present - see check_ranking_wiring(),
+    which treats that as a hard error on the first batch rather than a silent no-op for the whole run.
+    """
+    tex_np = tex.detach().cpu().numpy() if torch.is_tensor(tex) else np.asarray(tex)
+    uniq = np.unique(tex_np)
+    g_pred = torch.stack([pred[np.nonzero(tex_np == t)[0]].mean() for t in uniq])
+    g_y = torch.stack([y[np.nonzero(tex_np == t)[0]].mean() for t in uniq])
+    terms = []
+    for i in range(len(uniq)):
+        for j in range(i + 1, len(uniq)):
+            if g_y[i] == g_y[j]:
+                continue
+            s = torch.sign(g_y[i] - g_y[j])
+            terms.append(torch.clamp(margin - s * (g_pred[i] - g_pred[j]), min=0.0))
+    if not terms:
+        z = pred.sum() * 0.0
+        return z, len(uniq), 0
+    return gamma * torch.stack(terms).mean(), len(uniq), len(terms)
+
+
+def check_ranking_wiring(n_groups, n_pairs, P):
+    """One-time startup safeguard for ranking_loss() (component C), run alongside check_pk_wiring() on
+    the first batch when --rank_gamma is on - same fail-fast-on-the-first-batch philosophy (see
+    check_pk_wiring's docstring); added together with component C on 2026-11-19."""
+    if n_groups < 2:
+        raise RuntimeError(f'[ranking sanity check] only {n_groups} texture group(s) in the first batch - '
+                            f'need >= 2 to form any ranking pair (--group_P={P} too small, or '
+                            '--group_batch actually off?)')
+    if n_pairs == 0:
+        raise RuntimeError('[ranking sanity check] 0 usable ranking pairs in the first batch - every pair '
+                            'of texture groups had an identical label (check --group_P / label values)')
+    print(f'[ranking sanity check] OK - first batch: {n_groups} texture groups, {n_pairs} ranking pairs.',
+          flush=True)
+
+
 def lds_weights(y_norm, bins=50, sigma=2.0):
     """Label Distribution Smoothing (Yang et al., ICML 2021): w ∝ 1/sqrt(smoothed density)."""
     hist, edges = np.histogram(y_norm, bins=bins, range=(float(np.min(y_norm)), float(np.max(y_norm))))
@@ -301,7 +473,7 @@ def metrics(pred, gt, tex):
                 tex_r=float(r), tex_ccc=float(ccc))
 
 
-def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, weight_tr=None):
+def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, weight_tr=None, train_tex=None):
     crit = make_criterion(args.loss)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     total = args.epochs
@@ -316,9 +488,16 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
     # carried as the last element of each batch and applied in make_criterion()'s weighted mean.
     if weight_tr is None:
         weight_tr = np.ones(len(train_ds), dtype=np.float32)
-    train_ds = TierWeighted(train_ds, weight_tr)
+    train_ds = TierWeighted(train_ds, weight_tr, train_tex)
 
-    if args.lds:
+    if args.group_batch:
+        # PK sampler (P textures x K patches/batch) - see src/data/samplers.py. train_tex must be
+        # aligned index-for-index with train_ds (before the TierWeighted wrap above, which preserves order).
+        if train_tex is None:
+            raise ValueError('train_torch(): --group_batch requires train_tex (per-sample texture ids)')
+        batch_sampler = TextureGroupedBatchSampler(train_tex, args.group_P, args.group_K)
+        loader = DataLoader(train_ds, batch_sampler=batch_sampler)
+    elif args.lds:
         y_tr = np.array([train_ds[i][-2].item() for i in range(len(train_ds))]) if not hasattr(train_ds, '_y') else train_ds._y
         w_lds = lds_weights(y_tr)
         loader = DataLoader(train_ds, batch_size=args.batch_size,
@@ -327,11 +506,14 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
 
     scaler = torch.amp.GradScaler('cuda', enabled=args.amp and device.type == 'cuda')
-    best, best_state, best_epoch, bad, history = None, None, -1, 0, []
-    for epoch in range(total):
-        model.train(); t0 = time.time(); run_loss = 0.0
+    agg_var_on, rank_on = (args.agg_alpha > 0 or args.var_beta > 0), args.rank_gamma > 0
+    aux_on = agg_var_on or rank_on
+    best, best_state, best_epoch, bad, history, sanity_checked = None, None, -1, 0, [], False
+    epoch_bar = tqdm(range(total), desc='train', unit='epoch', leave=False, disable=args.verbose)
+    for epoch in epoch_bar:
+        model.train(); t0 = time.time(); run_loss = run_agg = run_var = run_rank = 0.0
         for batch in loader:
-            *core, w = batch
+            *core, w, tex = batch
             inputs, y = prepare_batch_by_model(core, model, device)
             w = w.to(device)
             # image augmentation only for image inputs (B,C,H,W); feature-vector models are left untouched
@@ -342,6 +524,22 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
                 pred = forward_by_model(model, inputs)
             pred = pred.float().view_as(y)
             loss = crit(pred, y, w)
+            if aux_on:
+                agg_l = var_l = rank_l = pred.sum() * 0.0
+                if agg_var_on:
+                    agg_l, var_l, n_groups = aggregation_var_loss(pred.view(-1), y.view(-1), tex,
+                                                                   args.agg_alpha, args.var_beta, args.var_margin)
+                if rank_on:
+                    rank_l, n_groups_r, n_pairs = ranking_loss(pred.view(-1), y.view(-1), tex,
+                                                               args.rank_gamma, args.rank_margin)
+                if not sanity_checked:
+                    if agg_var_on:
+                        check_pk_wiring(tex, args.group_P, args.group_K, n_groups)
+                    if rank_on:
+                        check_ranking_wiring(n_groups_r, n_pairs, args.group_P)
+                    sanity_checked = True
+                loss = loss + agg_l + var_l + rank_l
+                run_agg += agg_l.item() * len(y); run_var += var_l.item() * len(y); run_rank += rank_l.item() * len(y)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             run_loss += loss.item() * len(y)
         if sched: sched.step()
@@ -350,7 +548,10 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         pv = pv * (y_max - y_min + 1e-8) + y_min; gv = gv * (y_max - y_min + 1e-8) + y_min
         m = metrics(pv, gv, val_tex)
         score = {'val_rmse': m['patch_rmse'], 'val_tex_mae': m['tex_mae'], 'val_ccc': -m['tex_ccc']}[args.select]
-        history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds), sec=time.time() - t0, **{f'val_{k}': v for k, v in m.items()}))
+        history.append(dict(epoch=epoch, train_loss=run_loss / len(train_ds),
+                            train_agg_loss=run_agg / len(train_ds), train_var_loss=run_var / len(train_ds),
+                            train_rank_loss=run_rank / len(train_ds),
+                            sec=time.time() - t0, **{f'val_{k}': v for k, v in m.items()}))
         if best is None or score < best:
             best, best_epoch, bad = score, epoch, 0
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -359,8 +560,10 @@ def train_torch(model, train_ds, val_ds, val_tex, args, device, y_min, y_max, we
         if args.verbose:
             print(f'  ep {epoch:3d} loss {history[-1]["train_loss"]:.4f} val_rmse {m["patch_rmse"]:.2f} '
                   f'val_texMAE {m["tex_mae"]:.2f} slope {m["tex_slope"]:.2f} {"*" if bad == 0 else ""}', flush=True)
+        epoch_bar.set_postfix(loss=f'{history[-1]["train_loss"]:.4f}', val_texMAE=f'{m["tex_mae"]:.2f}', best=best_epoch)
         if args.patience and bad >= args.patience:
             break
+    epoch_bar.close()
     model.load_state_dict(best_state)
     return model, best_epoch, history
 
@@ -381,6 +584,30 @@ def main():
     ap.add_argument('--patience', type=int, default=0, help='0 = no early stopping (paper setting)')
     ap.add_argument('--loss', choices=['mse', 'huber', 'l1', 'ccc', 'mse_ccc'], default='mse')
     ap.add_argument('--lds', action='store_true')
+    ap.add_argument('--group_batch', action='store_true',
+                    help="PK batch sampler (--group_P textures x --group_K patches/batch) instead of plain "
+                         "shuffle - see src/data/samplers.py. Prerequisite for a texture-level aggregation/"
+                         "ranking auxiliary loss (not added by this flag alone). Mutually exclusive with --lds.")
+    ap.add_argument('--group_P', type=int, default=8, help='--group_batch: distinct textures per batch')
+    ap.add_argument('--group_K', type=int, default=7, help='--group_batch: patches per texture per batch (P*K ~= batch_size)')
+    ap.add_argument('--agg_alpha', type=float, default=0.0,
+                    help="texture-level aggregation loss weight (requires --group_batch): L1 between the "
+                         "in-batch grouped mean prediction and the texture label - see aggregation_var_loss(). "
+                         "0 = off (default). Not yet swept; tune via CV before using in a real run.")
+    ap.add_argument('--var_beta', type=float, default=0.0,
+                    help="anti-variance-collapse regularisation weight (requires --group_batch): penalises "
+                         "in-batch per-texture prediction std below --var_margin. 0 = off (default). Not yet "
+                         "swept; tune via CV before using in a real run.")
+    ap.add_argument('--var_margin', type=float, default=0.02,
+                    help='--var_beta: target floor for the in-batch per-texture prediction std, on the '
+                         'fold-normalised [0,1] target scale')
+    ap.add_argument('--rank_gamma', type=float, default=0.0,
+                    help="pairwise ranking auxiliary loss weight (requires --group_batch): margin hinge "
+                         "on the predicted order of different textures' in-batch aggregated predictions "
+                         "- see ranking_loss(). 0 = off (default). Not yet swept.")
+    ap.add_argument('--rank_margin', type=float, default=0.05,
+                    help='--rank_gamma: required separation (on the fold-normalised [0,1] target scale) '
+                         'between two correctly-ordered textures before the hinge is 0')
     ap.add_argument('--select', choices=['val_rmse', 'val_tex_mae', 'val_ccc'], default='val_rmse')
     ap.add_argument('--aug', action='store_true')
     ap.add_argument('--cosine', action='store_true')
@@ -390,6 +617,14 @@ def main():
                     help="lambda_A':lambda_B tier loss-weight ratio (default 16.0, the participant-level-"
                          "variance recalculation; see the lambda-validation slide / strategy doc §4). "
                          "R=1.0 recovers the old unweighted (uniform) loss.")
+    ap.add_argument('--eval_tier_a', action='store_true',
+                    help="ALSO predict each fold model on Tier A (8 native APT textures) and save "
+                         "rep{R}_fold{F}_pred_tierA.csv (strategy doc §18.1, 'role 1' repeated "
+                         "confirmatory-evaluation sample). Tier A never affects training/fold-building/"
+                         "model-selection either way - this only adds a post-hoc prediction pass with the "
+                         "already-fixed fold model. ONLY for the single final CV run once the recipe is "
+                         "100% locked - never during recipe/hyperparameter exploration (see help text "
+                         "above / module docstring - this would reintroduce the §9/§10.3 leakage).")
     ap.add_argument('--tag', default=None)
     ap.add_argument('--out', default='output/results_cv', help='output/ is git-ignored')
     ap.add_argument('--data_root', default=None, help='override data_tier_root, e.g. data/trustworthy')
@@ -406,6 +641,13 @@ def main():
     ap.add_argument('--max_folds', type=int, default=None, help='smoke test only')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
+    if args.lds and args.group_batch:
+        raise SystemExit('--lds and --group_batch are mutually exclusive (both replace the default batch sampler)')
+    if (args.agg_alpha > 0 or args.var_beta > 0 or args.rank_gamma > 0) and not args.group_batch:
+        raise SystemExit('--agg_alpha/--var_beta/--rank_gamma require --group_batch (these texture-level '
+                         'auxiliary losses need batches grouped by texture - see src/data/samplers.py - '
+                         'otherwise groups/pairs would be degenerate and the terms would silently be '
+                         'near-zero no-ops)')
 
     conf = yaml.safe_load(open('config.yaml', encoding='utf-8'))
     conf['model'] = args.model
@@ -427,12 +669,28 @@ def main():
     args.weight_decay = args.weight_decay if args.weight_decay is not None else float(conf.get('weight_decay', 1e-4))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # lambda_ratio is ALWAYS part of the tag, even at the 16.0 default - never omit it. A run folder is
+    # keyed purely by this name and the skip check below (`{run_name}_pred.csv` exists -> skip) never
+    # inspects the args that produced it, so two genuinely different training objectives sharing one name
+    # would silently alias: before 2026-10-30 every sample was weighted 1.0 unconditionally (lambda_ratio
+    # didn't exist as a concept yet), which is NOT the same experiment as an explicit lambda_ratio=16.0
+    # tier-weighted run, even though 16.0 is also this flag's default today. Omitting the suffix at the
+    # default previously caused exactly this: lambda_sweep's and tune_epochs's default-lambda runs for
+    # the transformer silently reused pre-tier-weighting 'final'/'mae_screen'/'ablation' results instead of
+    # actually training with Tier A' upweighted - see the (already-tainted) run folder named without
+    # '_lr...' still sitting in output/results_cv/ from before this fix; delete it so this now-unique tag
+    # trains fresh.
     tag = args.tag or (f'{args.model}_{args.protocol}' + (f'{args.k}' if args.protocol == 'cv' else '') +
-                       f'_{args.loss}' + ('_lds' if args.lds else '') + ('_aug' if args.aug else '') +
+                       f'_{args.loss}' + ('_lds' if args.lds else '') +
+                       (f'_pk{args.group_P}x{args.group_K}' if args.group_batch else '') +
+                       (f'_agg{args.agg_alpha:g}' if args.agg_alpha else '') +
+                       (f'_var{args.var_beta:g}-{args.var_margin:g}' if args.var_beta else '') +
+                       (f'_rank{args.rank_gamma:g}-{args.rank_margin:g}' if args.rank_gamma else '') +
+                       ('_aug' if args.aug else '') +
                        ('_cos' if args.cosine else '') + f'_{args.select}' +
                        (f'_in-{args.inputs}' if args.inputs != 'all' else '') + ('_nolsfg' if args.no_lsfg else '') +
                        (f'_feat{args.feature_mode}' if args.feature_mode not in (None, 'legacy') else '') +
-                       (f'_lr{args.lambda_ratio:g}' if args.lambda_ratio != 16.0 else ''))
+                       f'_lr{args.lambda_ratio:g}')
     if args.print_tag:
         print(tag); return
     out = Path(args.out) / tag; out.mkdir(parents=True, exist_ok=True)
@@ -447,12 +705,30 @@ def main():
           f'lambda_ratio={args.lambda_ratio:g}')
     feats = base_features(base) if args.feature_mode == 'original' else None
 
-    for r in range(args.start_repeat, args.repeats):
+    if args.eval_tier_a:
+        # Tier A loaded ONCE, outside the fold loop (it is the same 8 textures for every fold/repeat) -
+        # see strategy doc §18.1 "role 1". It never enters build_train_pool_dataframes()/build_concat_base()
+        # above, never contributes to make_folds()/the train-val-test split, and never affects model
+        # selection: each fold model below only predicts on it, after the fact, using that fold's own
+        # train-fold-fit normalisation/transforms (see inside the loop).
+        print('[WARNING] --eval_tier_a is ON: every fold model below will ALSO be evaluated on Tier A. '
+              'This is only valid for the single final CV run once the recipe is 100% locked (strategy '
+              'doc §18.1) - re-running this during recipe/hyperparameter exploration would reintroduce '
+              'the exact Tier A leakage §9/§10.3 are designed to prevent.', flush=True)
+        df_a = build_tier_a_dataframe(conf, args.data_root)
+        base_a, all_df_a, input_dim_a, keep_a = build_concat_base(conf, {'A': df_a}, device, args.max_patches)
+        print(f'[data] Tier A (role-1 repeated-eval sample): {all_df_a.texture.nunique()} textures, '
+              f'{len(keep_a)} patches', flush=True)
+
+    for r in tqdm(range(args.start_repeat, args.repeats), desc='CV repeats', unit='repeat'):
         seed = args.base_seed + r
         folds = make_folds(all_df, args.protocol, args.k, args.n_val, seed)
-        for f, (tr_t, va_t, te_t) in enumerate(folds[:args.max_folds]):
+        for f, (tr_t, va_t, te_t) in enumerate(tqdm(folds[:args.max_folds], desc=f'repeat {r} folds', unit='fold', leave=False)):
             run_name = f'rep{r:02d}_fold{f}'
-            if (out / f'{run_name}_pred.csv').exists():
+            done = (out / f'{run_name}_pred.csv').exists()
+            if args.eval_tier_a:
+                done = done and (out / f'{run_name}_pred_tierA.csv').exists()
+            if done:
                 print(f'[skip] {run_name} already done'); continue
             set_seed(seed * 100 + f)
             sel = lambda ts: keep[np.isin(all_df.texture.values[keep], ts)]
@@ -477,6 +753,18 @@ def main():
                 ds_tr, ds_va, ds_te = (InputAblation(d, kh, kn) for d in (ds_tr, ds_va, ds_te))
                 ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
 
+            ds_a = None
+            if args.eval_tier_a:
+                # Tier A predicted with THIS fold's own train-fold-fit normalisation (y_min/y_max) and
+                # transforms (ColumnMinMax cols/lo/hi, InputAblation kh/kn - all already fit above on the
+                # train fold only, same objects reused for ds_te) - Tier A contributes nothing to any of
+                # those fits, only receives them.
+                ds_a = NormalizedSubset(base_a, keep_a, y_min, y_max)
+                if args.feature_mode == 'original':
+                    ds_a = ColumnMinMax(ds_a, cols, lo, hi)
+                if args.inputs != 'all':
+                    ds_a = InputAblation(ds_a, kh, kn)
+
             t0 = time.time()
             model = create_model(conf, input_dim=input_dim, device=device)
             if args.no_lsfg:                                         # equal, fixed fusion weights
@@ -485,21 +773,43 @@ def main():
                 model.LSFG.fusion_gates.requires_grad_(False)
             if is_torch_model(model):
                 model, best_epoch, hist = train_torch(model, ds_tr, ds_va, all_df.texture.values[i_va],
-                                                      args, device, y_min, y_max, weight_tr=w_tr)
+                                                      args, device, y_min, y_max, weight_tr=w_tr,
+                                                      train_tex=all_df.texture.values[i_tr])
                 pd.DataFrame(hist).to_csv(out / f'{run_name}_history.csv', index=False)
                 p, g = predict(model, ds_te, device, args.batch_size, args.amp)
                 ptr, gtr = predict(model, ds_tr, device, args.batch_size, args.amp)
+                if args.eval_tier_a:
+                    p_a, g_a = predict(model, ds_a, device, args.batch_size, args.amp)
             else:                                                     # sklearn models (lr, svr)
                 X, yy = dataset_to_numpy(ds_tr); model.fit(X, yy, sample_weight=w_tr); best_epoch = -1
                 Xt, g = dataset_to_numpy(ds_te); p = np.asarray(model.predict(Xt)).ravel()
                 ptr = np.asarray(model.predict(X)).ravel(); gtr = yy
+                if args.eval_tier_a:
+                    Xa, g_a = dataset_to_numpy(ds_a); p_a = np.asarray(model.predict(Xa)).ravel()
             den = lambda v: v * (y_max - y_min + 1e-8) + y_min
             p, g, ptr, gtr = den(p), den(g), den(ptr), den(gtr)
+            if args.eval_tier_a:
+                p_a, g_a = den(p_a), den(g_a)
 
             pred_df = pd.DataFrame({'image_id': all_df.image_id.values[i_te], 'texture': all_df.texture.values[i_te],
                                     'tier': all_df.tier.values[i_te], 'gt': g, 'pred': p,
                                     'repeat': r, 'fold': f})
             pred_df.to_csv(out / f'{run_name}_pred.csv', index=False)
+            tier_a_meta = None
+            if args.eval_tier_a:
+                # Role 1 (§18.1): this fold model's Tier A predictions, saved alongside the normal OOF
+                # pred.csv. Aggregating these across all 5*repeats fold files into the repeated-evaluation
+                # sample (per-repeat texture-level pooling, then mean±SD across repeats) is done by
+                # test/cv/tier_a_confirm.py. Filename is "..._pred_tierA.csv", NOT "..._tierA_pred.csv":
+                # test/cv/cv_aggregate.py's own OOF summary globs '*_pred.csv', which would otherwise
+                # silently also pick up this file (wrong texture ids, wrong fold membership) - the
+                # "_pred" suffix must not be the last 9 characters of the filename.
+                pred_df_a = pd.DataFrame({'image_id': all_df_a.image_id.values[keep_a],
+                                          'texture': all_df_a.texture.values[keep_a],
+                                          'tier': all_df_a.tier.values[keep_a], 'gt': g_a, 'pred': p_a,
+                                          'repeat': r, 'fold': f})
+                pred_df_a.to_csv(out / f'{run_name}_pred_tierA.csv', index=False)
+                tier_a_meta = metrics(p_a, g_a, all_df_a.texture.values[keep_a])
             lsfg = ([round(float(v), 4) for v in model.get_lsfg_weights().cpu()]
                     if hasattr(model, 'get_lsfg_weights') else None)    # learned [texture, height, normal] weights
             meta = dict(repeat=r, fold=f, seed=seed, best_epoch=int(best_epoch), minutes=(time.time() - t0) / 60,
@@ -507,10 +817,12 @@ def main():
                         n_train_tex=len(tr_t), n_val_tex=len(va_t), n_test_tex=len(te_t),
                         test=metrics(p, g, all_df.texture.values[i_te]),
                         train=metrics(ptr, gtr, all_df.texture.values[i_tr]),
-                        test_textures=[int(t) for t in te_t], val_textures=[int(t) for t in va_t])
+                        test_textures=[int(t) for t in te_t], val_textures=[int(t) for t in va_t],
+                        tier_a=tier_a_meta)
             json.dump(meta, open(out / f'{run_name}_meta.json', 'w'), indent=1)
+            tier_a_log = f' | tierA texMAE={tier_a_meta["tex_mae"]:.2f}' if tier_a_meta else ''
             print(f'[{run_name}] best_epoch={best_epoch} test texMAE={meta["test"]["tex_mae"]:.2f} '
-                  f'patchMAE={meta["test"]["patch_mae"]:.2f} slope={meta["test"]["tex_slope"]:.2f} | '
+                  f'patchMAE={meta["test"]["patch_mae"]:.2f} slope={meta["test"]["tex_slope"]:.2f}{tier_a_log} | '
                   f'train texMAE={meta["train"]["tex_mae"]:.2f} slope={meta["train"]["tex_slope"]:.2f} '
                   f'({meta["minutes"]:.1f} min)', flush=True)
 

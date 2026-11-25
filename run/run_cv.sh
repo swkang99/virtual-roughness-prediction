@@ -31,6 +31,18 @@
 #                  input ablation (INPUT_VARIANTS, default "texture" = height/normal replaced by constant maps)
 #                  LSFG ablation  (fusion gates frozen at equal weights 1/3)
 #                then one table with the baselines, the full model and the ablations (same folds)
+#   confirm    : strategy doc §18.1 "role 1" - THE single final CV, once every recipe (Ours=C0, each
+#                baseline=its own original-paper recipe per §12) is 100% locked. Every model, its own
+#                recipe, 5-fold CV x 10 repeats, WITH --eval_tier_a (each fold model also predicts on
+#                Tier A - never retrained on it - producing the repeated confirmatory-evaluation sample;
+#                see test/cv/cv_experiment.py's --eval_tier_a help text). Tags are identical to
+#                tune_epochs's, so if tune_epochs already ran, this continues the SAME run folders from
+#                repeat 2 to 9 instead of duplicating work.
+#                *** Run 'confirm' only once - re-running it to chase a better Tier A number is exactly
+#                the leakage §9/§10.3 forbid. After it finishes, run (in this order, never skipping or
+#                reordering):
+#                  1. test/cv/pre_confirm_diagnostics.py  - sanity checks that never look at Tier A
+#                  2. test/cv/tier_a_confirm.py            - the actual confirmatory Tier A result ***
 #
 # Environment overrides
 #   RECIPE        training flags of Ours' (transformer) final recipe (without --aug, which is added for
@@ -82,8 +94,8 @@ COMMON="--data_root ${DATA_ROOT} --feature_cache_root ${FEAT_CACHE} --feature_mo
 stage=${1:-compare}
 stage=${stage#--}                                  # accept "--all" as well as "all"
 case "$stage" in
-  compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components) ;;
-  *) echo "Usage: bash run/run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components}"; exit 1 ;;
+  compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components|confirm) ;;
+  *) echo "Usage: bash run/run_cv.sh {compare|baseline|ablation|all|mae_screen|final|lambda_sweep|tune_epochs|fairness|components|confirm}"; exit 1 ;;
 esac
 mkdir -p "$LOGS" "$OUT"
 
@@ -237,6 +249,32 @@ if [[ $stage == components ]]; then
   RUNS+="$(tag $C --no_lsfg) "
   compare --protocol cv --ref "$FINAL_CV" --name compare_cv_components --runs $(paper_runs cv) "$FINAL_CV" $RUNS \
     | tee "$OUT/COMPARE_cv_components.md"
+fi
+
+if [[ $stage == confirm ]]; then
+  # strategy doc §18.1 "role 1" - see the header comment above. Same per-model recipe branching as
+  # tune_epochs/run_holdout.sh (BASELINE RECIPE note): Ours gets $RECIPE $AUG --lambda_ratio $LAMBDA,
+  # every baseline gets no recipe override and --lambda_ratio 1. The only addition is --eval_tier_a.
+  n_models=$(wc -w <<< "$MODELS"); i=0
+  CONFIRM_RUNS=""
+  for m in $MODELS; do
+    i=$((i + 1))
+    if [[ "$m" == "transformer" ]]; then
+      MRECIPE="$RECIPE"; MAUG="--aug"; MLAMBDA="$LAMBDA"
+    else
+      MRECIPE=""; MAUG=""; MLAMBDA="1"
+    fi
+    echo "=== [confirm $i/$n_models] model=$m (locked recipe, --eval_tier_a) ==="
+    run --model "$m" $COMMON --protocol cv --k 5 --repeats 10 $MRECIPE $MAUG --lambda_ratio "$MLAMBDA" --eval_tier_a \
+      2>&1 | tee -a "$LOGS/confirm_${m}.log"
+    CONFIRM_RUNS+="$(tag --model "$m" --protocol cv --k 5 $MRECIPE $MAUG --lambda_ratio "$MLAMBDA") "
+  done
+  compare --protocol cv --ref transformer --name compare_cv_confirm --runs $CONFIRM_RUNS \
+    | tee "$OUT/COMPARE_cv_confirm.md"
+  echo ""
+  echo ">>> Next (in this order - do not skip or reorder, see the stage's header comment):"
+  echo "    python -m test.cv.pre_confirm_diagnostics $OUT --holdout_root ${HOLDOUT_OUT:-output/results_holdout} --tune_repeats $TUNE_REPEATS"
+  echo "    python -m test.cv.tier_a_confirm $OUT --holdout_root ${HOLDOUT_OUT:-output/results_holdout}"
 fi
 
 python -m test.cv.cv_aggregate "$OUT"/*/ | tee "$OUT/ALL_SUMMARY.md"

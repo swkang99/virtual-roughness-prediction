@@ -277,7 +277,10 @@ def main():
         torch.save(dict(model_state_dict=model.state_dict(), **deploy_meta), out / 'model.pt')
     else:                                                  # sklearn models (lr, svr) - no state_dict
         import joblib
-        joblib.dump(dict(model=model, **deploy_meta), out / 'model.pkl')
+        # NOTE: deploy_meta already has a 'model' key (the architecture name string, e.g. 'lr') -
+        # the fitted estimator goes under 'estimator' instead to avoid a dict(model=..., **deploy_meta)
+        # keyword collision (that used to raise "got multiple values for keyword argument 'model'").
+        joblib.dump(dict(estimator=model, **deploy_meta), out / 'model.pkl')
 
     pred_df = pd.DataFrame({'image_id': all_df_a.image_id.values[keep_a], 'texture': all_df_a.texture.values[keep_a],
                             'tier': all_df_a.tier.values[keep_a], 'gt': g, 'pred': p})

@@ -264,28 +264,12 @@ def main():
     den = lambda v: v * (y_max - y_min + 1e-8) + y_min
     p, g, ptr, gtr = den(p), den(g), den(ptr), den(gtr)
 
-    # Deployment checkpoint for this "role 2" full-pool model (strategy doc §18.1 role 2 - the model
-    # actually used in User Study #1-1/#2, as opposed to role 1's CV fold models which are never deployed).
-    # Saved for every model (cheap), not just the transformer, so any of them can be re-used later without
-    # a retrain. Carries everything src/model/export.py (or any future extractor) needs to reconstruct and
-    # correctly denormalize this exact trained model: architecture name + input_dim (to rebuild via
-    # create_model), the train-pool target normalization (y_min/y_max - REQUIRED to turn a raw model output
-    # back into an APT-scale roughness value), and, for feature_mode='original' models, the GLCM column
-    # indices + min-max fit (REQUIRED to reproduce the same input feature scaling at inference time).
-    deploy_meta = dict(model=args.model, input_dim=int(input_dim), feature_mode=args.feature_mode,
-                       y_min=y_min, y_max=y_max,
-                       glcm_cols=(list(map(int, glcm_cols)) if glcm_cols is not None else None),
-                       glcm_lo=(glcm_lo.tolist() if glcm_lo is not None else None),
-                       glcm_hi=(glcm_hi.tolist() if glcm_hi is not None else None))
-    if is_torch_model(model):
-        torch.save(dict(model_state_dict=model.state_dict(), **deploy_meta), out / 'model.pt')
-    else:                                                  # sklearn models (lr, svr) - no state_dict
-        import joblib
-        # NOTE: deploy_meta already has a 'model' key (the architecture name string, e.g. 'lr') -
-        # the fitted estimator goes under 'estimator' instead to avoid a dict(model=..., **deploy_meta)
-        # keyword collision (that used to raise "got multiple values for keyword argument 'model'").
-        joblib.dump(dict(estimator=model, **deploy_meta), out / 'model.pkl')
-
+    # pred.csv/meta.json are written FIRST, before the checkpoint-save block below - that block does
+    # extra format-specific work (torch.save/joblib.dump) that's more likely to break on an edge case
+    # (e.g. the missing-input_dim-for-maps-models bug this line used to have), and training up to this
+    # point is the expensive part (cnn_1d_simple/transformer: tens of minutes). Writing pred.csv first
+    # means the (out / 'pred.csv').exists() skip check above will still work on a re-run even if the
+    # checkpoint save fails for some new reason, instead of silently redoing the whole training run.
     pred_df = pd.DataFrame({'image_id': all_df_a.image_id.values[keep_a], 'texture': all_df_a.texture.values[keep_a],
                             'tier': all_df_a.tier.values[keep_a], 'gt': g, 'pred': p})
     pred_df.to_csv(out / 'pred.csv', index=False)
@@ -299,6 +283,33 @@ def main():
     print(f'[{tag}] test texMAE={meta["test"]["tex_mae"]:.2f} test CCC={meta["test"]["tex_ccc"]:.3f} | '
           f'train texMAE={meta["train"]["tex_mae"]:.2f} slope={meta["train"]["tex_slope"]:.2f} '
           f'({meta["minutes"]:.1f} min)', flush=True)
+
+    # Deployment checkpoint for this "role 2" full-pool model (strategy doc §18.1 role 2 - the model
+    # actually used in User Study #1-1/#2, as opposed to role 1's CV fold models which are never deployed).
+    # Saved for every model (cheap), not just the transformer, so any of them can be re-used later without
+    # a retrain. Carries everything src/model/export.py (or any future extractor) needs to reconstruct and
+    # correctly denormalize this exact trained model: architecture name + input_dim (to rebuild via
+    # create_model), the train-pool target normalization (y_min/y_max - REQUIRED to turn a raw model output
+    # back into an APT-scale roughness value), and, for feature_mode='original' models, the GLCM column
+    # indices + min-max fit (REQUIRED to reproduce the same input feature scaling at inference time).
+    deploy_meta = dict(model=args.model,
+                       # input_dim is None for "maps" models (transformer, cnn_1d_simple) - they take an
+                       # image triplet, not a flat feature vector, so there is no dimensionality to record
+                       # (see src/data/factory.py build_maps_base_dataset() / build_concat_base()).
+                       input_dim=(int(input_dim) if input_dim is not None else None),
+                       feature_mode=args.feature_mode,
+                       y_min=y_min, y_max=y_max,
+                       glcm_cols=(list(map(int, glcm_cols)) if glcm_cols is not None else None),
+                       glcm_lo=(glcm_lo.tolist() if glcm_lo is not None else None),
+                       glcm_hi=(glcm_hi.tolist() if glcm_hi is not None else None))
+    if is_torch_model(model):
+        torch.save(dict(model_state_dict=model.state_dict(), **deploy_meta), out / 'model.pt')
+    else:                                                  # sklearn models (lr, svr) - no state_dict
+        import joblib
+        # NOTE: deploy_meta already has a 'model' key (the architecture name string, e.g. 'lr') -
+        # the fitted estimator goes under 'estimator' instead to avoid a dict(model=..., **deploy_meta)
+        # keyword collision (that used to raise "got multiple values for keyword argument 'model'").
+        joblib.dump(dict(estimator=model, **deploy_meta), out / 'model.pkl')
 
 
 if __name__ == '__main__':

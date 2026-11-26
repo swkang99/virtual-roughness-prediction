@@ -109,7 +109,10 @@ def _write_meta(meta_path: Path, meta: dict):
 
 def _export_torch(run_dir: Path, pt_path: Path, out_root: Path, opset: int):
     device = torch.device('cpu')
-    ckpt = torch.load(pt_path, map_location=device)
+    # weights_only=False: this checkpoint is a plain dict of our own deploy_meta (str/int/float/list/
+    # None) + a tensor state_dict, not just tensors - torch >= 2.6 defaults weights_only=True, which can
+    # refuse to unpickle that mix depending on version. We wrote this file ourselves, so it's trusted.
+    ckpt = torch.load(pt_path, map_location=device, weights_only=False)
     model_name = ckpt['model']
     out_dir = out_root / run_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +210,7 @@ def main():
         if wanted is not None:
             probe_pt, probe_pkl = run_dir / 'model.pt', run_dir / 'model.pkl'
             if probe_pt.exists():
-                model_name = torch.load(probe_pt, map_location='cpu')['model']
+                model_name = torch.load(probe_pt, map_location='cpu', weights_only=False)['model']
             else:
                 import joblib
                 model_name = joblib.load(probe_pkl)['model']

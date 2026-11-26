@@ -30,8 +30,6 @@ This project was developed under the following environment:
 - torch: 2.8.0.dev20250415+cu128  
 - torchvision: 0.22.0.dev20250416+cu128  
 
-
-The `requirements.txt` file does not specify versions for `torch` and `torchvision`.  
 Please install the appropriate versions based on your system configuration, referring to the environment above.
 
 ### Data

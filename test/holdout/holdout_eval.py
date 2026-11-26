@@ -237,12 +237,14 @@ def main():
     ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
     ds_te = NormalizedSubset(base_a, keep_a, y_min, y_max)
 
+    glcm_cols, glcm_lo, glcm_hi = None, None, None
     if args.feature_mode == 'original':                  # GLCM min-max fitted on the train pool only
         cols = GLCM_SLICE['original']
         F_tr = base_features(base)[keep][:, cols]
         lo, hi = F_tr.min(0), F_tr.max(0)
         ds_tr, ds_te = ColumnMinMax(ds_tr, cols, lo, hi), ColumnMinMax(ds_te, cols, lo, hi)
         ds_tr._y = (y_tr - y_min) / (y_max - y_min + 1e-8)
+        glcm_cols, glcm_lo, glcm_hi = cols, lo, hi        # persisted below for deployment (role 2 checkpoint)
 
     t0 = time.time()
     model = create_model(conf, input_dim=input_dim, device=device)
@@ -257,6 +259,25 @@ def main():
         ptr, gtr = np.asarray(model.predict(X)).ravel(), yy
     den = lambda v: v * (y_max - y_min + 1e-8) + y_min
     p, g, ptr, gtr = den(p), den(g), den(ptr), den(gtr)
+
+    # Deployment checkpoint for this "role 2" full-pool model (strategy doc §18.1 role 2 - the model
+    # actually used in User Study #1-1/#2, as opposed to role 1's CV fold models which are never deployed).
+    # Saved for every model (cheap), not just the transformer, so any of them can be re-used later without
+    # a retrain. Carries everything src/model/export.py (or any future extractor) needs to reconstruct and
+    # correctly denormalize this exact trained model: architecture name + input_dim (to rebuild via
+    # create_model), the train-pool target normalization (y_min/y_max - REQUIRED to turn a raw model output
+    # back into an APT-scale roughness value), and, for feature_mode='original' models, the GLCM column
+    # indices + min-max fit (REQUIRED to reproduce the same input feature scaling at inference time).
+    deploy_meta = dict(model=args.model, input_dim=int(input_dim), feature_mode=args.feature_mode,
+                       y_min=y_min, y_max=y_max,
+                       glcm_cols=(list(map(int, glcm_cols)) if glcm_cols is not None else None),
+                       glcm_lo=(glcm_lo.tolist() if glcm_lo is not None else None),
+                       glcm_hi=(glcm_hi.tolist() if glcm_hi is not None else None))
+    if is_torch_model(model):
+        torch.save(dict(model_state_dict=model.state_dict(), **deploy_meta), out / 'model.pt')
+    else:                                                  # sklearn models (lr, svr) - no state_dict
+        import joblib
+        joblib.dump(dict(model=model, **deploy_meta), out / 'model.pkl')
 
     pred_df = pd.DataFrame({'image_id': all_df_a.image_id.values[keep_a], 'texture': all_df_a.texture.values[keep_a],
                             'tier': all_df_a.tier.values[keep_a], 'gt': g, 'pred': p})

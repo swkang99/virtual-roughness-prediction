@@ -239,7 +239,11 @@ def main():
 
     glcm_cols, glcm_lo, glcm_hi = None, None, None
     if args.feature_mode == 'original':                  # GLCM min-max fitted on the train pool only
-        cols = GLCM_SLICE['original']
+        # GLCM_SLICE['original'] is a plain Python slice (e.g. slice(2891, 2955)), not an index list -
+        # expand it here so glcm_cols below is JSON/deploy_meta-safe (list(map(int, slice(...))) crashes
+        # with "'slice' object is not iterable"). ColumnMinMax/fancy-indexing both work the same either way.
+        s = GLCM_SLICE['original']
+        cols = list(range(s.start, s.stop, s.step or 1))
         F_tr = base_features(base)[keep][:, cols]
         lo, hi = F_tr.min(0), F_tr.max(0)
         ds_tr, ds_te = ColumnMinMax(ds_tr, cols, lo, hi), ColumnMinMax(ds_te, cols, lo, hi)

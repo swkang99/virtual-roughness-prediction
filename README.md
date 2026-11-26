@@ -12,7 +12,7 @@ Venue: WHC 2027
 
 ### Python
 
-A virtual environment satisfying `python>=3.9` is required.
+A virtual environment satisfying `python>=3.11` is required.
 
 ### Dependencies
 
@@ -46,7 +46,10 @@ The configuration values required to reproduce the model are stored in `config.y
 
 ## Reproduction
 
-Models compared: **Ours** (transformer) plus 6 baselines — LR, SVR, ANN,
+### Models compared
+**Ours** (transformer) plus 6 baselines 
+
+— LR, SVR, ANN,
 Hassan 1D-CNN (`cnn_1d_wassem`), Scirep 1D-CNN (`cnn_1d_scirep`, Taye et
 al. 2020), and Simple 1D-CNN (no external citation, an internal
 lightweight comparator) — 7 models total.
@@ -61,7 +64,7 @@ the scripts under `run/`); the data lives under `data/trustworthy` (see
 
 Only **Ours (transformer)** uses the proposed recipe end to end —
 `--loss l1 --select val_tex_mae --cosine --lr 3e-4 --aug` plus the locked
-`--lambda_ratio 27` (strategy doc §17). Every baseline model is trained
+`--lambda_ratio 27` . Every baseline model is trained
 with its own original-paper recipe instead (this repo's un-flagged
 defaults: `loss=mse`, `select=val_rmse`, no `lds`/`aug`/`cosine`,
 `feature_mode=original` for the Hassan-style features) and
@@ -74,7 +77,7 @@ scripts route it to the transformer alone.
 ### Stages, in order
 
 ```bash
-bash run/run_cv.sh lambda_sweep              # Ours only, light CV -> picks --lambda_ratio (locked: 27)
+bash run/run_cv.sh lambda_sweep               # Ours only, light CV -> picks --lambda_ratio (locked: 27)
 LAMBDA=27 bash run/run_cv.sh tune_epochs      # every model, light CV -> output/results_cv/epochs.csv
 bash run/run_holdout.sh 27                    # role 2: single full-pool model per model, Tier A score for reference
 LAMBDA=27 bash run/run_cv.sh confirm          # role 1: final locked-recipe 5-fold x R-repeats CV, --eval_tier_a
